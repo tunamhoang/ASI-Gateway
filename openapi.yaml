@@ -19,6 +19,21 @@ paths:
       responses:
         '200':
           description: Accepted
+  /cms/sync-employees:
+    post:
+      summary: Sync employees from CMS to ASI devices
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  count:
+                    type: integer
   /asi/webhook:
     post:
       summary: Receive events from ASI device
