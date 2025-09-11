@@ -1,0 +1,28 @@
+version: '3.9'
+services:
+  app:
+    build: .
+    ports:
+      - '8080:8080'
+    env_file:
+      - .env.example
+    depends_on:
+      - db
+      - redis
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: asi
+      POSTGRES_PASSWORD: asi
+      POSTGRES_DB: asi
+    ports:
+      - '5432:5432'
+  redis:
+    image: redis:7-alpine
+    ports:
+      - '6379:6379'
+  adminer:
+    image: adminer
+    restart: always
+    ports:
+      - '8081:8080'
