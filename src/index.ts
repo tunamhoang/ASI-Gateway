@@ -3,6 +3,8 @@ import { env } from './core/env.js';
 import { logger } from './core/logger.js';
 import { fetchEmployees } from './cms/hrm-client.js';
 import { syncUsersToAsi } from './users/sync-service.js';
+import { startAlarmTcpServer } from "./alarms/tcp-listener";
+startAlarmTcpServer(logger);
 
 async function buildServer() {
   const app = Fastify({ logger });
