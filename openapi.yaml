@@ -1,0 +1,100 @@
+openapi: 3.1.0
+info:
+  title: ASI Gateway
+  version: 0.1.0
+servers:
+  - url: http://localhost:8080
+paths:
+  /users/sync:
+    post:
+      summary: Sync users to devices
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: '#/components/schemas/UserSyncItem'
+      responses:
+        '200':
+          description: Accepted
+  /asi/webhook:
+    post:
+      summary: Receive events from ASI device
+      responses:
+        '200':
+          description: OK
+  /devices:
+    get:
+      summary: List devices
+      responses:
+        '200':
+          description: OK
+    post:
+      summary: Create device
+      responses:
+        '201':
+          description: Created
+  /devices/{id}:
+    patch:
+      summary: Update device
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+    delete:
+      summary: Delete device
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Deleted
+  /devices/{id}/test-connection:
+    post:
+      summary: Test connection to device
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+  /healthz:
+    get:
+      summary: Health check
+      responses:
+        '200':
+          description: OK
+  /readyz:
+    get:
+      summary: Readiness check
+      responses:
+        '200':
+          description: OK
+components:
+  schemas:
+    UserSyncItem:
+      type: object
+      required: [userId, name]
+      properties:
+        userId:
+          type: string
+        name:
+          type: string
+        citizenIdNo:
+          type: string
+        faceImageBase64:
+          type: string
+          description: Base64 face image

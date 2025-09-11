@@ -1,0 +1,50 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Device {
+  id         String   @id @default(cuid())
+  name       String
+  ip         String
+  port       Int      @default(80)
+  username   String
+  password   String
+  https      Boolean  @default(false)
+  lastSeenAt DateTime?
+  status     String   @default("unknown")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  events     Event[]
+}
+
+model User {
+  userId      String   @id
+  name        String
+  citizenIdNo String?
+  status      String   @default("active")
+  faceHash    String?
+  syncedAt    DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Event {
+  id           String   @id @default(cuid())
+  deviceId     String
+  userId       String?
+  method       String
+  timestamp    DateTime
+  raw          Json
+  delivered    Boolean   @default(false)
+  deliverTries Int       @default(0)
+  deliveredAt  DateTime?
+  Device       Device    @relation(fields: [deviceId], references: [id])
+  @@index([timestamp])
+  @@index([deviceId])
+  @@index([userId])
+}
