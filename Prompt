@@ -1,0 +1,314 @@
+PROMPT CHO CODEGEN: “TẠO REPO ASI-GATEWAY”
+Mục tiêu & bối cảnh
+
+Tạo một service tên asi-gateway (Node.js + TypeScript) làm trung gian giữa hệ thống HR/CMS của doanh nghiệp và các thiết bị Dahua ASI (stand-alone). Chức năng:
+
+Đồng bộ user từ HR/CMS sang thiết bị (upsert theo lô, gán ảnh khuôn mặt).
+
+Dùng AccessUser V2 (insert/update nhiều user/lần; nếu tồn tại thì update).
+
+Gán ảnh/feature khuôn mặt theo UserID qua FaceInfoManager (chỉ cần FaceData hoặc PhotoData base64).
+
+Hỗ trợ xóa/truy vấn nhiều user (removeAll, removeMulti, list) khi cần reset/đối chiếu.
+
+Nhận sự kiện realtime do thiết bị push về (Alarm Server) rồi forward ngay cho CMS qua webhook do CMS cung cấp (có HMAC). Cần endpoint public cho thiết bị trỏ về.
+
+Fallback polling: khi webhook bị gián đoạn, có job kéo log theo thời gian/recno để bù.
+
+Bảo mật: inbound/outbound đều HTTPS, hỗ trợ mTLS với thiết bị (thiết bị có API import certificate).
+
+Lưu ý API thiết bị Dahua (trích tài liệu “DAHUA_HTTP_API_V3.39”):
+
+Upsert user hàng loạt: AccessUser V2 – Add Access User (insert/update).
+
+Gán khuôn mặt: POST /cgi-bin/FaceInfoManager.cgi?action=add (FaceData/PhotoData base64).
+
+Quản trị user: removeAll / removeMulti / list.
+
+Cấu hình Alarm Server (thiết bị push về Gateway).
+
+Tech stack
+
+Runtime: Node.js 20, TypeScript
+
+HTTP server: Fastify hoặc Express (chọn Fastify)
+
+DB: PostgreSQL (Prisma ORM)
+
+Cache/Queue: Redis + BullMQ (retry, backoff, idempotency)
+
+Auth & Security: HMAC (x-signature), Basic Auth cho inbound từ thiết bị, mTLS optional
+
+Docs: OpenAPI 3.1 (Swagger UI)
+
+Packaging: Dockerfile + docker-compose
+
+Lint/Test: ESLint + Prettier + Vitest/Jest + Supertest
+
+CI: GitHub Actions (lint, test, build, docker)
+
+Kiến trúc & modules
+
+/src/core/: hạ tầng chung (env, logger, http, crypto, errors)
+
+/src/devices/: registry thiết bị (CRUD), health-check, online status
+
+/src/users/: đồng bộ user (batch), gán face, xóa/đối chiếu
+
+/src/webhooks/: endpoint nhận push realtime từ ASI, xác thực, chuẩn hóa sự kiện, router đẩy sang CMS
+
+/src/poller/: job fallback kéo log theo thời gian/recno
+
+/src/cms/: client gọi webhook CMS (HMAC)
+
+/prisma/: schema DB
+
+Data model (Prisma)
+model Device {
+  id           String   @id @default(cuid())
+  name         String
+  ip           String
+  port         Int      @default(80)
+  username     String
+  password     String
+  https        Boolean  @default(false)
+  lastSeenAt   DateTime?
+  status       String   @default("unknown") // online/offline/unknown
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  events       Event[]
+}
+
+model User {
+  userId       String   @id
+  name         String
+  citizenIdNo  String? 
+  status       String   @default("active")
+  faceHash     String?  // sha256 của ảnh/feature để tránh push trùng
+  syncedAt     DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model Event {
+  id           String   @id @default(cuid())
+  deviceId     String
+  userId       String?
+  method       String    // "face" | "card" | "fingerprint" | "unknown"
+  timestamp    DateTime
+  raw          Json
+  delivered    Boolean   @default(false)
+  deliverTries Int       @default(0)
+  deliveredAt  DateTime?
+  Device       Device    @relation(fields: [deviceId], references: [id])
+  @@index([timestamp])
+  @@index([deviceId])
+  @@index([userId])
+}
+
+Cấu hình & Secrets
+
+.env.example
+
+# HTTP
+PORT=8080
+HOST=0.0.0.0
+NODE_ENV=production
+
+# DB
+DATABASE_URL=postgresql://asi:asi@db:5432/asi?schema=public
+
+# REDIS
+REDIS_URL=redis://redis:6379
+
+# CMS
+CMS_ENDPOINT=https://cms.example.com/attendance/webhook
+CMS_HMAC_KEY=change_me
+
+# INBOUND (thiết bị -> gateway)
+INBOUND_BASIC_USER=asi
+INBOUND_BASIC_PASS=strong_password
+ALLOWLIST_CIDRS=10.0.0.0/8,192.168.0.0/16
+
+# DEVICE TLS (optional mTLS)
+TLS_ENABLE=false
+TLS_KEY_PATH=/certs/server.key
+TLS_CERT_PATH=/certs/server.crt
+
+API surface (OpenAPI)
+
+Tạo file openapi.yaml với các endpoint:
+
+POST /users/sync
+Nhận danh sách user từ HR/CMS → chia batch ≤10 rồi upsert lên thiết bị:
+• AccessUser V2 (insert/update nhiều user).
+• Gắn ảnh khuôn mặt (nếu có) qua FaceInfoManager action=add.
+
+POST /asi/webhook
+Endpoint cho thiết bị ASI push sự kiện xác thực (Alarm Server) → xác thực Basic + allowlist IP → chuẩn hóa sự kiện → enqueue gửi CMS.
+
+GET /devices | POST /devices | PATCH /devices/{id} | DELETE /devices/{id}
+Quản lý registry thiết bị.
+
+POST /devices/{id}/test-connection
+Kiểm tra kết nối (HTTP GET /cgi-bin/magicBox.cgi?action=getMachineName hoặc endpoint status), lưu lastSeenAt.
+
+GET /healthz | GET /readyz
+Liveness/Readiness.
+
+JSON schema (ví dụ)
+/components/schemas/UserSyncItem:
+  type: object
+  required: [userId, name]
+  properties:
+    userId: { type: string }
+    name: { type: string }
+    citizenIdNo: { type: string }
+    faceImageBase64: { type: string, description: "Base64 ảnh mặt" }
+
+Luồng đồng bộ user (service logic)
+
+Nhận mảng user → chunk size 10 → với từng device online:
+
+Gọi AccessUser.cgi?action=insertMulti theo quy tắc upsert (v2). (nội dung theo tài liệu “Insert or update multiple new users… Update when the current user exists”).
+
+Nếu có ảnh: POST /cgi-bin/FaceInfoManager.cgi?action=add với { "UserID": "<id>", "Info": { "UserName": "...", "PhotoData": ["<base64>"] } }.
+
+Lưu faceHash để tránh gửi lại khi không đổi.
+
+Retry có backoff, idempotency key = deviceId:userId:hash.
+
+Nhận & đẩy sự kiện realtime
+
+/asi/webhook: yêu cầu Basic Auth (INBOUND_BASIC_*) và IP allowlist (ALLOWLIST_CIDRS).
+
+Chuẩn hóa payload về:
+
+{
+  "userId": "U0001",
+  "timestamp": "2025-09-11T08:01:02Z",
+  "deviceId": "dev-1",
+  "method": "face",
+  "raw": { /* giữ nguyên để audit */ }
+}
+
+
+Tạo chữ ký: X-Signature: hex(HMAC_SHA256(body, CMS_HMAC_KEY)) → POST sang CMS_ENDPOINT.
+
+Nếu CMS 4xx/5xx: lưu vào queue (BullMQ) để retry với backoff (e.g., 5s, 30s, 2m, 10m) tối đa N lần; log cảnh báo.
+
+Fallback Poller
+
+Cron job (BullMQ repeatable) kéo log theo khoảng thời gian/hoặc “recno lớn hơn cuối cùng” để bù khi webhook đứt.
+
+Áp dụng các API recordFinder/getQuerySize tương ứng bản ghi access.
+
+Bảo mật
+
+Inbound: Basic Auth + CIDR allowlist + rate limit.
+
+Outbound: HMAC bắt buộc tới CMS.
+
+TLS/mTLS: bật nếu TLS_ENABLE=true (kèm mount cert); tham chiếu API importCert nếu cần đẩy cert sang thiết bị.
+
+Cấu trúc thư mục
+asi-gateway/
+  ├─ src/
+  │  ├─ core/        # env, logger(pino), http, errors
+  │  ├─ devices/     # controller, service, dahua-client
+  │  ├─ users/       # sync controller, mapper, validators
+  │  ├─ webhooks/    # inbound from ASI, normalize, enqueue
+  │  ├─ cms/         # client push to CMS (HMAC)
+  │  ├─ poller/      # fallback jobs
+  │  ├─ index.ts     # bootstrap fastify, routes, swagger
+  ├─ prisma/
+  │  └─ schema.prisma
+  ├─ openapi.yaml
+  ├─ docker-compose.yml
+  ├─ Dockerfile
+  ├─ Makefile
+  ├─ .github/workflows/ci.yml
+  ├─ .env.example
+  └─ README.md
+
+Dahua HTTP client (tối thiểu cần)
+
+Tạo lớp DahuaClient với các hàm:
+
+insertUsersBatchV2(device, users[]) → gọi AccessUser.cgi?action=insertMulti (batch ≤10) (v2). Upsert.
+
+addFace(device, { userId, userName, photoBase64|featureBase64[] }) → FaceInfoManager.cgi?action=add.
+
+removeAllUsers(device) / removeMulti(device, ids[]) / listUsers(device, ids[]).
+
+getMachineName(device) (health test).
+
+Tùy chọn: importCert(device, ...) nếu triển khai mTLS.
+
+Tất cả request hỗ trợ: timeout, retry nhẹ, basic auth (user/pass thiết bị), build URL theo https?://ip:port.
+
+Mẫu route & handler (mô tả yêu cầu code)
+
+/users/sync [POST]
+
+Validate body theo schema.
+
+Chunk 10 user → tuần tự qua danh sách device “online”:
+
+insertUsersBatchV2 → nếu có faceImageBase64 thì addFace.
+
+Ghi log + cập nhật User.syncedAt.
+
+/asi/webhook [POST]
+
+Check Basic Auth + IP allowlist.
+
+Chuẩn hóa payload; lưu Event + enqueue job push-to-CMS (BullMQ).
+
+/devices… CRUD + /devices/{id}/test-connection
+
+Gọi getMachineName (hoặc endpoint status) → update lastSeenAt, status.
+
+Poller jobs
+
+(Option) /poll job tham số since → gọi record APIs để bù dữ liệu.
+
+Docker & Deploy
+
+Dockerfile multi-stage: build TS → run node:20-alpine.
+
+docker-compose gồm: gateway, db (postgres), redis, adminer (tùy), swagger-ui (serve openapi.yaml nếu muốn).
+
+Healthcheck container, restart: always.
+
+CI (GitHub Actions)
+
+Jobs: lint, test, build, docker (op).
+
+Test plan
+
+Unit test: normalizeAsiEvent, hmacSign, DahuaClient (mock fetch).
+
+API test (Supertest): /users/sync, /asi/webhook, /devices.
+
+Integration: spin postgres+redis bằng docker-compose trong CI.
+
+README (nội dung yêu cầu)
+
+Mô tả hệ thống, sơ đồ luồng, cách cấu hình Alarm Server trên thiết bị điểm về https://<gateway>/asi/webhook (port, user/pass), format payload mẫu.
+
+Hướng dẫn import cert (nếu bật TLS).
+
+Cách gọi /users/sync với ví dụ JSON.
+
+Acceptance Criteria
+
+Chạy docker-compose up -d → service lắng tại :8080, swagger tại /docs.
+
+Tạo device → test-connection thành công.
+
+Gọi /users/sync với 2–3 user (kèm 1 ảnh base64) → gateway thực hiện upsert + add face.
+
+Thiết bị đẩy sự kiện vào /asi/webhook → gateway forward tới CMS_ENDPOINT với HMAC.
+
+Khi CMS lỗi 500 → sự kiện vào queue và retry theo backoff.
