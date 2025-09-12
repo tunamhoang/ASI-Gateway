@@ -19,7 +19,13 @@ function chunk<T>(arr: T[], size: number): T[][] {
 
 export async function syncUsersToAsi(users: UserSyncItem[]): Promise<void> {
   logger.info({ count: users.length }, 'syncUsersToAsi triggered');
-  const devices = await listDevices();
+  let devices;
+  try {
+    devices = await listDevices();
+  } catch (err) {
+    logger.error({ err }, 'listDevices failed');
+    throw err;
+  }
   for (const device of devices) {
     await syncToDevice(device, users);
   }
