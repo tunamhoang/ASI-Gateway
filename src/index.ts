@@ -14,7 +14,11 @@ async function buildServer() {
   app.get('/readyz', async () => ({ status: 'ready' }));
 
   app.post('/cms/sync-employees', async (req, reply) => {
-    const employees = await fetchEmployees();
+    const raw = await fetchEmployees();
+    const employees = Array.isArray(raw) ? raw : [raw];
+    if (!Array.isArray(raw)) {
+      logger.warn({ raw }, 'fetchEmployees returned non-array data');
+    }
     const users = await Promise.all(
       employees.map(async (e: any) => {
         let faceImageBase64 = e.FaceImageBase64;
