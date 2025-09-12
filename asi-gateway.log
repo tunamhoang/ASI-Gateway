@@ -1,0 +1,17 @@
+
+> asi-gateway@1.0.0 dev
+> tsx watch src/index.ts
+
+{"level":30,"time":1757594114082,"pid":2185,"hostname":"LAPTOP-KC8I5S35","msg":"Alarm TCP listening on 0.0.0.0:8888"}
+{"level":30,"time":1757594114089,"pid":2185,"hostname":"LAPTOP-KC8I5S35","msg":"Server listening at http://0.0.0.0:8080"}
+{"level":30,"time":1757594114090,"pid":2185,"hostname":"LAPTOP-KC8I5S35","msg":"Server listening on http://0.0.0.0:8080"}
+{"level":30,"time":1757594236768,"pid":2185,"hostname":"LAPTOP-KC8I5S35","msg":"ASI connected: 172.25.108.221:47744"}
+{"level":30,"time":1757594236770,"pid":2185,"hostname":"LAPTOP-KC8I5S35","msg":"ASI disconnected: 172.25.108.221:47744"}
+{"level":30,"time":1757594266427,"pid":2185,"hostname":"LAPTOP-KC8I5S35","msg":"ASI connected: 172.25.108.221:46848"}
+{"level":30,"time":1757594266431,"pid":2185,"hostname":"LAPTOP-KC8I5S35","msg":"ASI disconnected: 172.25.108.221:46848"}
+{"level":30,"time":1757594271533,"pid":2185,"hostname":"LAPTOP-KC8I5S35","msg":"ASI connected: 172.25.108.221:46864"}
+{"level":30,"time":1757594271534,"pid":2185,"hostname":"LAPTOP-KC8I5S35","msg":"ASI disconnected: 172.25.108.221:46864"}
+{"level":30,"time":1757594272521,"pid":2185,"hostname":"LAPTOP-KC8I5S35","msg":"ASI connected: 172.25.108.221:46868"}
+{"level":30,"time":1757594272523,"pid":2185,"hostname":"LAPTOP-KC8I5S35","msg":"ASI disconnected: 172.25.108.221:46868"}
+{"level":30,"time":1757594318066,"pid":2185,"hostname":"LAPTOP-KC8I5S35","msg":"ASI connected: 172.25.108.221:45046"}
+{"level":30,"time":1757594318067,"pid":2185,"hostname":"LAPTOP-KC8I5S35","msg":"ASI disconnected: 172.25.108.221:45046"}
