@@ -52,6 +52,23 @@ Example response:
 }
 ```
 
+### Sync CMS employees to ASI devices
+
+1. Set the CMS HRM variables in `.env`:
+   - `CMS_HRM_ENDPOINT` – points to `GetEmployees`
+   - `CMS_HRM_AUTH_HEADER` – authorization header if required
+2. Register each ASI device via `POST /devices` with IP, credentials and port.
+3. Start the gateway:
+   ```bash
+   npm run dev
+   ```
+4. Trigger synchronization:
+   ```bash
+   curl -X POST http://<host>:<port>/cms/sync-employees
+   ```
+   Gateway downloads face images from the CMS, converts them to base64 and
+   upserts users plus photos to every registered device.
+
 ### Configure Device Alarm Server
 
 Point devices to `https://<gateway>/asi/webhook` with provided basic auth credentials.
