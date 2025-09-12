@@ -5,10 +5,13 @@ import { logger } from './core/logger.js';
 import { fetchEmployees } from './cms/hrm-client.js';
 import { syncUsersToAsi } from './users/sync-service.js';
 import { startAlarmTcpServer } from "./alarms/tcp-listener";
-startAlarmTcpServer(logger);
+// cast logger to any to satisfy tcp-listener's Console-based signature
+startAlarmTcpServer(logger as any);
 
 async function buildServer() {
-  const app = Fastify({ logger });
+  // Fastify's type definitions expect either a boolean or a specific logger interface.
+  // Our Pino logger is compatible at runtime but not structurally typed, so cast to any.
+  const app = Fastify({ logger: logger as any });
 
   app.get('/healthz', async () => ({ status: 'ok' }));
   app.get('/readyz', async () => ({ status: 'ready' }));

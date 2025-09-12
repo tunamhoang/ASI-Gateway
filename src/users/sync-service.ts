@@ -2,7 +2,9 @@ import fetch from 'node-fetch';
 import pLimit from 'p-limit';
 import { logger } from '../core/logger.js';
 import { listDevices } from '../devices/index.js';
+
 import { fetchBufferWithRetry } from '../core/http-fetch.js';
+
 
 export interface UserSyncItem {
   userId: string;
@@ -19,6 +21,7 @@ function chunk<T>(arr: T[], size: number): T[][] {
   return res;
 }
 
+
 export async function pushFaceFromUrl(device, userId: string, userName: string, faceUrl: string) {
   const buf = await fetchBufferWithRetry(faceUrl, 3);
   await addFace(device, { userId, userName, photoBase64: b64 });
@@ -28,6 +31,7 @@ export async function syncUsersToAsi(
   users: UserSyncItem[],
   deviceConcurrency = 5,
 ): Promise<void> {
+
   logger.info({ count: users.length }, 'syncUsersToAsi triggered');
   let devices;
   try {
