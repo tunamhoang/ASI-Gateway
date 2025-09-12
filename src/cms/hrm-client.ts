@@ -13,5 +13,6 @@ export async function fetchEmployees() {
   if (!res.ok) {
     throw new Error(`HRM fetch error: ${res.status} ${await res.text()}`);
   }
-  return res.json();
+  const resJson = await res.json();
+  return resJson?.data ?? resJson;
 }
