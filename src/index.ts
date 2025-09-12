@@ -43,7 +43,12 @@ async function buildServer() {
         };
       })
     );
-    await syncUsersToAsi(users);
+    try {
+      await syncUsersToAsi(users);
+    } catch (err) {
+      logger.error({ err }, 'syncUsersToAsi failed');
+      return reply.status(503).send({ status: 'error', message: 'service unavailable' });
+    }
     reply.send({ status: 'ok', count: users.length });
   });
   return app;
