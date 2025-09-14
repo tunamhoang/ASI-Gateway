@@ -1,10 +1,9 @@
 import pLimit from 'p-limit';
 import { logger } from '../core/logger.js';
 import { listDevices } from '../devices/index.js';
-//import type { Device } from '@prisma/client';
 import { fetchBufferWithRetry } from '../core/http-fetch.js';
+import { httpLimit } from '../core/http-limit.js';
 
-// ⬇️ Khai báo kiểu cho thiết bị (điều chỉnh nếu bạn có type sẵn)
 export interface DeviceConn {
   id: string | number;
   ip: string;
@@ -19,20 +18,15 @@ export interface UserSyncItem {
   name: string;
   citizenIdNo?: string;
   faceImageBase64?: string;
+  faceUrl?: string; // ✅ thêm để đồng bộ với đoạn push từ URL
 }
 
 function chunk<T>(arr: T[], size: number): T[][] {
-  const res: T[][] = [];
-  for (let i = 0; i < arr.length; i += size) {
-    res.push(arr.slice(i, i + size));
-  }
-  return res;
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
 }
 
-type FetchInput = Parameters<typeof fetch>[0];
-type FetchInit  = Parameters<typeof fetch>[1];
-
-// ⬇️ Helper fetch với timeout chuẩn
 async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit = {}, timeoutMs = 10_000) {
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), timeoutMs);
@@ -41,6 +35,20 @@ async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit = {}
     return res;
   } finally {
     clearTimeout(t);
+  }
+}
+
+function basicAuth(device: DeviceConn) {
+  return 'Basic ' + Buffer.from(`${device.username}:${device.password}`).toString('base64');
+}
+
+async function assertOk(res: Response, ctx: Record<string, unknown>) {
+  if (!res.ok) {
+    let bodyText = '';
+    try { bodyText = await res.text(); } catch {}
+    const err = new Error(`HTTP ${res.status} ${res.statusText}`);
+    logger.warn({ ...ctx, status: res.status, statusText: res.statusText, body: bodyText.slice(0, 500) }, 'request failed');
+    throw err;
   }
 }
 
@@ -53,8 +61,7 @@ export async function addFace(
   const scheme = device.https ? 'https' : 'http';
   const url = `${scheme}://${device.ip}:${device.port}/cgi-bin/FaceInfoManager.cgi?action=add&format=json`;
   const headers = {
-    Authorization:
-      'Basic ' + Buffer.from(`${device.username}:${device.password}`).toString('base64'),
+    Authorization: basicAuth(device),
     'Content-Type': 'application/json',
   } as const;
 
@@ -63,25 +70,22 @@ export async function addFace(
 
   const body = { UserID: userId, Info: info };
 
-  await fetchWithTimeout(url, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(body),
-  }, 10_000);
+  const res = await fetchWithTimeout(url, { method: 'POST', headers, body: JSON.stringify(body) }, 10_000);
+  await assertOk(res, { deviceId: device.id, userId, api: 'FaceInfoManager.add' });
 }
 
 export async function pushFaceFromUrl(
-  device: DeviceConn,          // ✅ gõ kiểu
+  device: DeviceConn,
   userId: string,
   userName: string,
   faceUrl: string,
 ) {
-  const buf = await fetchBufferWithRetry(faceUrl, 3);
-  const photoBase64 = buf.toString('base64');
   try {
+    const buf = await fetchBufferWithRetry(faceUrl, 3);
+    const photoBase64 = buf.toString('base64');
     await addFace(device, userId, photoBase64, userName);
   } catch (err) {
-    logger.warn({ err, deviceId: device.id, userId }, 'push face failed');
+    logger.warn({ err, deviceId: device.id, userId, faceUrl }, 'push face failed');
   }
 }
 
@@ -93,7 +97,6 @@ export async function syncUsersToAsi(
 
   let devices: DeviceConn[];
   try {
-    // Nếu listDevices đã có type, bỏ phần `as DeviceConn[]`
     devices = (await listDevices()) as DeviceConn[];
   } catch (err) {
     logger.error({ err }, 'listDevices failed');
@@ -101,9 +104,7 @@ export async function syncUsersToAsi(
   }
 
   const limit = pLimit(deviceConcurrency);
-  await Promise.all(
-    devices.map((device: DeviceConn) => limit(() => syncToDevice(device, users))),
-  );
+  await Promise.all(devices.map((device) => limit(() => syncToDevice(device, users))));
 }
 
 export async function syncToDevice(
@@ -113,8 +114,7 @@ export async function syncToDevice(
 ) {
   const scheme = device.https ? 'https' : 'http';
   const headers = {
-    Authorization:
-      'Basic ' + Buffer.from(`${device.username}:${device.password}`).toString('base64'),
+    Authorization: basicAuth(device),
     'Content-Type': 'application/json',
   } as const;
 
@@ -123,23 +123,23 @@ export async function syncToDevice(
   // 1) Push user metadata theo batch 10
   const batches = chunk(users, 10);
   await Promise.all(
-    batches.map((batch: UserSyncItem[]) =>
+    batches.map((batch) =>
       limit(async () => {
         const url = `${scheme}://${device.ip}:${device.port}/cgi-bin/AccessUser.cgi?action=insertMulti&format=json`;
         const body = {
-          UserData: batch.map((u: UserSyncItem) => ({
-            UserID: u.userId,
-            UserName: u.name,
-            CitizenIDNo: u.citizenIdNo,
-          })),
+          UserData: batch.map((u) => {
+            const x: Record<string, unknown> = {
+              UserID: u.userId,
+              UserName: u.name,
+            };
+            if (u.citizenIdNo) x.CitizenIDNo = u.citizenIdNo; // ✅ loại undefined
+            return x;
+          }),
         };
 
         try {
-          await fetchWithTimeout(url, {
-            method: 'POST',
-            headers,
-            body: JSON.stringify(body),
-          }, 10_000);
+          const res = await fetchWithTimeout(url, { method: 'POST', headers, body: JSON.stringify(body) }, 10_000);
+          await assertOk(res, { deviceId: device.id, api: 'AccessUser.insertMulti', users: body.UserData.length });
         } catch (err) {
           logger.warn({ err, deviceId: device.id }, 'insertMulti failed');
         }
@@ -148,17 +148,18 @@ export async function syncToDevice(
   );
 
   // 2) Push khuôn mặt (nếu có)
-  const faceUsers = users.filter((u) => u.faceImageBase64);
+  const faceUsers = users.filter((u) => u.faceImageBase64 || u.faceUrl);
   await Promise.all(
-    faceUsers.map((u: UserSyncItem) =>
-      limit(async () => {
+    faceUsers.map((u) =>
+      httpLimit(async () => {
         try {
-          await addFace(device, u.userId, u.faceImageBase64!, u.name);
+          if (u.faceImageBase64) {
+            await addFace(device, u.userId, u.faceImageBase64, u.name);
+          } else if (u.faceUrl) {
+            await pushFaceFromUrl(device, u.userId, u.name, u.faceUrl);
+          }
         } catch (err) {
-          logger.warn(
-            { err, deviceId: device.id, userId: u.userId },
-            'push face failed',
-          );
+          logger.warn({ err, deviceId: device.id, userId: u.userId }, 'push face (direct) failed');
         }
       }),
     ),

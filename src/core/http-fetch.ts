@@ -6,14 +6,14 @@ type FetchArgs = Parameters<typeof fetch>;
 type FetchInput = FetchArgs[0];
 type FetchInit = NonNullable<FetchArgs[1]>;
 
-const httpAgent = new Agent({
-  connections: 8,            // hạn chế kết nối / origin
-  pipelining: 0,
-  keepAliveMaxTimeout: 30_000,
-  keepAliveTimeout: 10_000,
-  headersTimeout: 30_000,
-  bodyTimeout: 0,            // timeout sẽ do AbortController lo
-});
+//const httpAgent = new Agent({
+//  connections: 8,            // hạn chế kết nối / origin
+// pipelining: 0,
+//  keepAliveMaxTimeout: 30_000,
+//  keepAliveTimeout: 10_000,
+//  headersTimeout: 30_000,
+// bodyTimeout: 0,            // timeout sẽ do AbortController lo
+//});
 
 function isRetryableError(err: any): boolean {
   const msg  = String(err?.message ?? '');
@@ -30,6 +30,15 @@ function isRetryableError(err: any): boolean {
     code === 'UND_ERR_HEADERS_TIMEOUT'
   );
 }
+
+export const httpAgent = new Agent({
+  connections: 6,
+  pipelining: 0,
+  keepAliveMaxTimeout: 30000,
+  keepAliveTimeout: 10000,
+  headersTimeout: 30000,
+  bodyTimeout: 0,
+});
 
 /** Fetch Buffer với timeout + retry/backoff. */
 export async function fetchBufferWithRetry(
