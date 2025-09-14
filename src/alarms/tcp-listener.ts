@@ -1,3 +1,4 @@
+
 import net from "net";
 import crypto from "crypto";
 import fetch from "node-fetch";
@@ -10,6 +11,7 @@ const RETRY_BACKOFF_MS = parseInt(
   process.env.ALARM_RETRY_BACKOFF_MS || "1000",
   10
 );
+
 
 // (tùy chọn) xác thực thiết bị theo User/Pass đã cấu hình ở AlarmServer.UserName/Password
 const INBOUND_USER = process.env.INBOUND_BASIC_USER || "admin";
