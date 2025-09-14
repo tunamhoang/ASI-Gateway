@@ -19,6 +19,14 @@ npm run dev
 
 API documentation available via OpenAPI at `/docs` when the server is running.
 
+## Build and Run (Docker Compose)
+
+```bash
+docker compose build --no-cache app
+docker compose up -d
+docker compose logs -f app
+```
+
 ## Environment Variables
 
 The gateway requires several environment variables to be defined at startup:
