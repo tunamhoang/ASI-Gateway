@@ -1,4 +1,3 @@
-//import fetch from 'node-fetch';
 import pLimit from 'p-limit';
 import { logger } from '../core/logger.js';
 import { listDevices } from '../devices/index.js';

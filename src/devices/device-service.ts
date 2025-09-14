@@ -1,4 +1,3 @@
-import fetch from 'node-fetch';
 import { prisma } from '../core/prisma.js';
 import { logger } from '../core/logger.js';
 
@@ -40,18 +39,22 @@ export async function pingDevice(device: {
 }) {
   const scheme = device.https ? 'https' : 'http';
   const url = `${scheme}://${device.ip}:${device.port}/cgi-bin/magicBox.cgi?action=getDeviceType`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 3000);
   try {
     const res = await fetch(url, {
-      timeout: 3000,
+      signal: controller.signal,
       headers: {
         Authorization:
           'Basic ' + Buffer.from(`${device.username}:${device.password}`).toString('base64'),
       },
-    });
+    } as RequestInit);
     return res.ok;
   } catch (err) {
     logger.warn({ err }, 'pingDevice failed');
     return false;
+  } finally {
+    clearTimeout(timer);
   }
 }
 

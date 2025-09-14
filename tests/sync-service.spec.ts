@@ -1,8 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('node-fetch', () => ({
-  default: vi.fn(),
-}));
+const fetch = vi.fn();
+vi.stubGlobal('fetch', fetch);
 
 vi.mock('../src/devices/index.js', () => ({
   listDevices: vi.fn(() =>
@@ -14,8 +13,6 @@ vi.mock('../src/devices/index.js', () => ({
 }));
 
 import { syncUsersToAsi, syncToDevice } from '../src/users/sync-service.js';
-
-const fetch = (await import('node-fetch')).default as any;
 
 beforeEach(() => {
   fetch.mockReset();

@@ -1,5 +1,4 @@
 import Fastify from 'fastify';
-import fetch from 'node-fetch';
 import { env } from './core/env.js';
 import { logger } from './core/logger.js';
 import { fetchEmployees } from './cms/hrm-client.js';

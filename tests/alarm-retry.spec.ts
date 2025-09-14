@@ -2,17 +2,14 @@ import { describe, expect, it, vi } from 'vitest';
 
 vi.useFakeTimers();
 
-vi.mock('node-fetch', () => ({
-  default: vi.fn(),
-}));
+const fetchMock = vi.fn();
+vi.stubGlobal('fetch', fetchMock);
 
 describe('forwardWithRetry', () => {
   it('retries and queues events on CMS failure', async () => {
     process.env.ALARM_MAX_RETRIES = '2';
     process.env.ALARM_RETRY_BACKOFF_MS = '10';
     const mod = await import('../src/alarms/tcp-listener.js');
-    const fetchMod = await import('node-fetch');
-    const fetchMock = fetchMod.default as unknown as vi.Mock;
 
     fetchMock.mockRejectedValue(new Error('fail'));
     const evt = { foo: 'bar' };
