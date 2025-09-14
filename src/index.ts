@@ -5,16 +5,9 @@ import { logger } from './core/logger.js';
 import { fetchEmployees } from './cms/hrm-client.js';
 import { syncUsersToAsi } from './users/sync-service.js';
 import { startAlarmTcpServer } from "./alarms/tcp-listener";
-import {
-  registerDevice,
-  listDevices,
-  updateDevice,
-  removeDevice,
-  refreshStatus,
-} from './devices/device-service.js';
 
-// cast logger to any to satisfy tcp-listener's Console-based signature
-startAlarmTcpServer(logger as any);
+import { hmacSign } from './core/hmac.js';
+
 
 async function buildServer() {
   // Fastify's type definitions expect either a boolean or a specific logger interface.
@@ -24,7 +17,22 @@ async function buildServer() {
   app.get('/healthz', async () => ({ status: 'ok' }));
   app.get('/readyz', async () => ({ status: 'ready' }));
 
-  app.register(deviceRoutes);
+
+  function ipToInt(ip: string): number {
+    return ip.split('.').reduce((acc, oct) => (acc << 8) + Number(oct), 0) >>> 0;
+  }
+
+  function isIpAllowed(ip: string): boolean {
+    if (env.allowlistCidrs.length === 0) return true;
+    const ipInt = ipToInt(ip);
+    return env.allowlistCidrs.some((cidr) => {
+      const [range, bitsStr] = cidr.split('/');
+      const bits = Number(bitsStr);
+      const mask = bits === 0 ? 0 : (~0 << (32 - bits)) >>> 0;
+      return (ipToInt(range) & mask) === (ipInt & mask);
+    });
+  }
+
 
   app.post('/cms/sync-employees', async (req, reply) => {
     const raw = await fetchEmployees();
@@ -65,135 +73,69 @@ async function buildServer() {
     reply.send({ status: 'ok', count: users.length });
   });
 
-  const deviceSchema = {
-    type: 'object',
-    properties: {
-      id: { type: 'string' },
-      name: { type: 'string' },
-      ip: { type: 'string' },
-      port: { type: 'number' },
-      username: { type: 'string' },
-      password: { type: 'string' },
-      https: { type: 'boolean' },
-      lastSeenAt: { type: ['string', 'null'], format: 'date-time' },
-      status: { type: 'string' },
-      createdAt: { type: 'string', format: 'date-time' },
-      updatedAt: { type: 'string', format: 'date-time' },
-    },
-  } as const;
 
-  const deviceInputSchema = {
-    type: 'object',
-    required: ['name', 'ip', 'username', 'password'],
-    properties: {
-      name: { type: 'string' },
-      ip: { type: 'string' },
-      port: { type: 'number' },
-      username: { type: 'string' },
-      password: { type: 'string' },
-      https: { type: 'boolean' },
-    },
-    additionalProperties: false,
-  } as const;
+  app.post('/users/sync', async (req, reply) => {
+    const users = req.body as any;
+    if (!Array.isArray(users)) {
+      return reply
+        .status(400)
+        .send({ status: 'error', message: 'invalid body' });
+    }
+    try {
+      await syncUsersToAsi(users);
+    } catch (err) {
+      logger.error({ err }, 'syncUsersToAsi failed');
+      return reply
+        .status(503)
+        .send({ status: 'error', message: 'service unavailable' });
+    }
+    reply.send({ status: 'ok', count: users.length });
+  });
 
-  const deviceUpdateSchema = {
-    type: 'object',
-    properties: {
-      name: { type: 'string' },
-      ip: { type: 'string' },
-      port: { type: 'number' },
-      username: { type: 'string' },
-      password: { type: 'string' },
-      https: { type: 'boolean' },
-    },
-    additionalProperties: false,
-  } as const;
-
-  const idParamSchema = {
-    type: 'object',
-    required: ['id'],
-    properties: { id: { type: 'string' } },
-  } as const;
-
-  app.get(
-    '/devices',
-    {
-      schema: { response: { 200: { type: 'array', items: deviceSchema } } },
-    },
-    async (_req, reply) => {
-      try {
-        const devices = await listDevices();
-        return devices;
-      } catch (err) {
-        reply.status(500).send({ message: 'failed to list devices' });
+  app.post('/asi/webhook', async (req, reply) => {
+    if (!isIpAllowed(req.ip)) {
+      return reply.status(403).send({ status: 'forbidden' });
+    }
+    if (env.inboundBasicUser) {
+      const auth = req.headers['authorization'];
+      if (!auth || !auth.startsWith('Basic ')) {
+        return reply.status(401).send({ status: 'unauthorized' });
       }
-    },
-  );
-
-  app.post(
-    '/devices',
-    { schema: { body: deviceInputSchema, response: { 201: deviceSchema } } },
-    async (req, reply) => {
-      try {
-        const device = await registerDevice(req.body as any);
-        reply.code(201).send(device);
-      } catch (err) {
-        reply.status(500).send({ message: 'failed to register device' });
+      const [user, pass] = Buffer.from(auth.slice(6), 'base64')
+        .toString()
+        .split(':');
+      if (user !== env.inboundBasicUser || pass !== env.inboundBasicPass) {
+        return reply.status(401).send({ status: 'unauthorized' });
       }
-    },
-  );
+    }
+    const bodyStr = JSON.stringify(req.body ?? {});
+    const sig = hmacSign(bodyStr, env.cmsHmacKey);
+    try {
+      await fetch(env.cmsEndpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Signature': sig,
+        },
+        body: bodyStr,
+      } as any);
+    } catch (err) {
+      logger.error({ err }, 'forward webhook failed');
+      return reply
+        .status(503)
+        .send({ status: 'error', message: 'service unavailable' });
+    }
+    reply.send({ status: 'ok' });
+  });
 
-  app.patch(
-    '/devices/:id',
-    { schema: { params: idParamSchema, body: deviceUpdateSchema } },
-    async (req, reply) => {
-      const { id } = req.params as { id: string };
-      try {
-        const device = await updateDevice(id, req.body as any);
-        reply.send(device);
-      } catch (err) {
-        reply.status(404).send({ message: 'device not found' });
-      }
-    },
-  );
-
-  app.delete(
-    '/devices/:id',
-    { schema: { params: idParamSchema } },
-    async (req, reply) => {
-      const { id } = req.params as { id: string };
-      try {
-        await removeDevice(id);
-        reply.status(204).send();
-      } catch (err) {
-        reply.status(404).send({ message: 'device not found' });
-      }
-    },
-  );
-
-  app.post(
-    '/devices/:id/test-connection',
-    { schema: { params: idParamSchema } },
-    async (req, reply) => {
-      const { id } = req.params as { id: string };
-      try {
-        const device = await refreshStatus(id);
-        if (!device) {
-          reply.status(404).send({ message: 'device not found' });
-          return;
-        }
-        reply.send({ status: device.status });
-      } catch (err) {
-        reply.status(500).send({ message: 'failed to test connection' });
-      }
-    },
-  );
   return app;
 }
 
 async function start() {
   const app = await buildServer();
   try {
+    // cast logger to any to satisfy tcp-listener's Console-based signature
+    startAlarmTcpServer(logger as any);
     await app.listen({ port: env.port, host: env.host });
     logger.info(`Server listening on http://${env.host}:${env.port}`);
   } catch (err) {
