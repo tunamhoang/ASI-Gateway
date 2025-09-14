@@ -1,9 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import { pingDevice } from '../src/devices/device-service.js';
 
-vi.mock('node-fetch', () => ({
-  default: vi.fn(() => Promise.resolve({ ok: true }))
-}));
+const fetchMock = vi.fn(() => Promise.resolve({ ok: true }));
+vi.stubGlobal('fetch', fetchMock);
 
 describe('pingDevice', () => {
   const device = {
@@ -20,8 +19,7 @@ describe('pingDevice', () => {
   });
 
   it('returns false when fetch fails', async () => {
-    const fetch = (await import('node-fetch')).default as any;
-    fetch.mockImplementationOnce(() => Promise.reject(new Error('fail')));
+    fetchMock.mockImplementationOnce(() => Promise.reject(new Error('fail')));
     const result = await pingDevice(device);
     expect(result).toBe(false);
   });

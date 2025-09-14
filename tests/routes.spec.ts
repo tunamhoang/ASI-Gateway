@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const fetchMock = vi.fn();
-vi.mock('node-fetch', () => ({ default: fetchMock }));
+vi.stubGlobal('fetch', fetchMock);
 
 const syncUsersToAsiMock = vi.fn();
 vi.mock('../src/users/sync-service.js', () => ({

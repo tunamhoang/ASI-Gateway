@@ -1,7 +1,6 @@
 
 import net from "net";
 import crypto from "crypto";
-import fetch from "node-fetch";
 
 const PORT = parseInt(process.env.ALARM_TCP_PORT || "8888", 10);
 const CMS_ENDPOINT = process.env.CMS_ENDPOINT!;
