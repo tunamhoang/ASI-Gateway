@@ -1,10 +1,17 @@
+
 import net from "net";
 import crypto from "crypto";
 import fetch from "node-fetch";
-import { env } from "../core/env";
 
 const PORT = parseInt(process.env.ALARM_TCP_PORT || "8888", 10);
-const { cmsEndpoint: CMS_ENDPOINT, cmsHmacKey: CMS_HMAC_KEY } = env;
+const CMS_ENDPOINT = process.env.CMS_ENDPOINT!;
+const CMS_HMAC_KEY = process.env.CMS_HMAC_KEY || "change_me";
+const MAX_RETRIES = parseInt(process.env.ALARM_MAX_RETRIES || "3", 10);
+const RETRY_BACKOFF_MS = parseInt(
+  process.env.ALARM_RETRY_BACKOFF_MS || "1000",
+  10
+);
+
 
 // (tùy chọn) xác thực thiết bị theo User/Pass đã cấu hình ở AlarmServer.UserName/Password
 const INBOUND_USER = process.env.INBOUND_BASIC_USER || "admin";
@@ -68,6 +75,36 @@ async function forwardToCMS(evt: any) {
   }
 }
 
+function wait(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export const failedEvents: any[] = [];
+
+export async function forwardWithRetry(evt: any, logger = console) {
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    try {
+      await forwardToCMS(evt);
+      return;
+    } catch (err: any) {
+      logger.warn?.(
+        { err: err.message, attempt: attempt + 1 },
+        "cms-forward-retry"
+      );
+      const delay = RETRY_BACKOFF_MS * Math.pow(2, attempt);
+      await wait(delay);
+    }
+  }
+  failedEvents.push(evt);
+}
+
+export async function processFailedEvents(logger = console) {
+  while (failedEvents.length) {
+    const evt = failedEvents.shift();
+    if (evt) await forwardWithRetry(evt, logger);
+  }
+}
+
 export function startAlarmTcpServer(logger = console) {
   const server = net.createServer((socket) => {
     const peer = `${socket.remoteAddress}:${socket.remotePort}`;
@@ -95,7 +132,7 @@ export function startAlarmTcpServer(logger = console) {
 
         const evt = tryParseEvent(chunk);
         logger.info?.({ peer, evt }, "alarm-event");
-        await forwardToCMS(evt);
+        await forwardWithRetry(evt, logger);
         socket.write("ACK\n");
       } catch (e: any) {
         logger.error?.({ peer, err: e.message }, "alarm-forward-error");
@@ -111,6 +148,8 @@ export function startAlarmTcpServer(logger = console) {
   server.listen(PORT, "0.0.0.0", () => {
     logger.info?.(`Alarm TCP listening on 0.0.0.0:${PORT}`);
   });
+
+  setInterval(() => processFailedEvents(logger), RETRY_BACKOFF_MS).unref();
 
   return server;
 }
