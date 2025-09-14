@@ -19,6 +19,19 @@ npm run dev
 
 API documentation available via OpenAPI at `/docs` when the server is running.
 
+## Environment Variables
+
+The gateway requires several environment variables to be defined at startup:
+
+- `CMS_ENDPOINT` – URL where alarm events are forwarded.
+- `CMS_HMAC_KEY` – shared secret used to sign webhook payloads.
+- `CMS_HRM_ENDPOINT` – CMS API endpoint for fetching employee data.
+- `CMS_HRM_AUTH_HEADER` – authorization header for the HRM API.
+
+Values can be supplied via the shell environment or a `.env` file. The
+application will throw an error during initialization if any of the required
+variables are missing.
+
 ### User Sync Example
 
 ```json
