@@ -24,7 +24,28 @@ function chunk<T>(arr: T[], size: number): T[][] {
 
 export async function pushFaceFromUrl(device, userId: string, userName: string, faceUrl: string) {
   const buf = await fetchBufferWithRetry(faceUrl, 3);
-  await addFace(device, { userId, userName, photoBase64: b64 });
+  const b64 = buf.toString('base64');
+  const scheme = device.https ? 'https' : 'http';
+  const url = `${scheme}://${device.ip}:${device.port}/cgi-bin/FaceInfoManager.cgi?action=add&format=json`;
+  const authHeader = {
+    Authorization:
+      'Basic ' + Buffer.from(`${device.username}:${device.password}`).toString('base64'),
+    'Content-Type': 'application/json',
+  };
+  const body = {
+    UserID: userId,
+    Info: { UserName: userName, PhotoData: [b64] },
+  };
+  try {
+    await fetch(url, {
+      method: 'POST',
+      headers: authHeader,
+      body: JSON.stringify(body),
+      timeout: 10000,
+    } as any);
+  } catch (err) {
+    logger.warn({ err, deviceId: device.id, userId }, 'push face failed');
+  }
 }
 
 export async function syncUsersToAsi(

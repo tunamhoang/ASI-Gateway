@@ -1,10 +1,10 @@
 import net from "net";
 import crypto from "crypto";
 import fetch from "node-fetch";
+import { env } from "../core/env";
 
 const PORT = parseInt(process.env.ALARM_TCP_PORT || "8888", 10);
-const CMS_ENDPOINT = process.env.CMS_ENDPOINT!;
-const CMS_HMAC_KEY = process.env.CMS_HMAC_KEY || "change_me";
+const { cmsEndpoint: CMS_ENDPOINT, cmsHmacKey: CMS_HMAC_KEY } = env;
 
 // (tùy chọn) xác thực thiết bị theo User/Pass đã cấu hình ở AlarmServer.UserName/Password
 const INBOUND_USER = process.env.INBOUND_BASIC_USER || "admin";

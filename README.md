@@ -19,6 +19,19 @@ npm run dev
 
 API documentation available via OpenAPI at `/docs` when the server is running.
 
+## Environment Variables
+
+The gateway requires several environment variables to be defined at startup:
+
+- `CMS_ENDPOINT` – URL where alarm events are forwarded.
+- `CMS_HMAC_KEY` – shared secret used to sign webhook payloads.
+- `CMS_HRM_ENDPOINT` – CMS API endpoint for fetching employee data.
+- `CMS_HRM_AUTH_HEADER` – authorization header for the HRM API.
+
+Values can be supplied via the shell environment or a `.env` file. The
+application will throw an error during initialization if any of the required
+variables are missing.
+
 ### User Sync Example
 
 ```json
@@ -57,7 +70,39 @@ Example response:
 1. Set the CMS HRM variables in `.env`:
    - `CMS_HRM_ENDPOINT` – points to `GetEmployees`
    - `CMS_HRM_AUTH_HEADER` – authorization header if required
-2. Register each ASI device via `POST /devices` with IP, credentials and port.
+2. Register each ASI device via `POST /devices` with its connection details.
+   ```bash
+   curl -X POST http://<host>:<port>/devices \
+     -H 'Content-Type: application/json' \
+     -d '{
+       "name": "Lobby",
+       "ip": "10.0.0.5",
+       "port": 80,
+       "username": "admin",
+       "password": "pass",
+       "https": false
+     }'
+   ```
+   Sample response:
+   ```json
+   {
+     "id": "d123",
+     "name": "Lobby",
+     "ip": "10.0.0.5",
+     "port": 80,
+     "username": "admin",
+     "password": "pass",
+     "https": false,
+     "status": "unknown",
+     "lastSeenAt": null,
+     "createdAt": "2024-01-01T00:00:00.000Z",
+     "updatedAt": "2024-01-01T00:00:00.000Z"
+   }
+   ```
+   Use `GET /devices` to view all registered devices:
+   ```bash
+   curl http://<host>:<port>/devices
+   ```
 3. Start the gateway:
    ```bash
    npm run dev
@@ -65,6 +110,13 @@ Example response:
 4. Trigger synchronization:
    ```bash
    curl -X POST http://<host>:<port>/cms/sync-employees
+   ```
+   Sample response:
+   ```json
+   {
+     "status": "ok",
+     "count": 2
+   }
    ```
    Gateway downloads face images from the CMS, converts them to base64 and
    upserts users plus photos to every registered device.

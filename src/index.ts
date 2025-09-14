@@ -5,7 +5,9 @@ import { logger } from './core/logger.js';
 import { fetchEmployees } from './cms/hrm-client.js';
 import { syncUsersToAsi } from './users/sync-service.js';
 import { startAlarmTcpServer } from "./alarms/tcp-listener";
+
 import { hmacSign } from './core/hmac.js';
+
 
 async function buildServer() {
   // Fastify's type definitions expect either a boolean or a specific logger interface.
@@ -14,6 +16,7 @@ async function buildServer() {
 
   app.get('/healthz', async () => ({ status: 'ok' }));
   app.get('/readyz', async () => ({ status: 'ready' }));
+
 
   function ipToInt(ip: string): number {
     return ip.split('.').reduce((acc, oct) => (acc << 8) + Number(oct), 0) >>> 0;
@@ -29,6 +32,7 @@ async function buildServer() {
       return (ipToInt(range) & mask) === (ipInt & mask);
     });
   }
+
 
   app.post('/cms/sync-employees', async (req, reply) => {
     const raw = await fetchEmployees();
@@ -68,6 +72,7 @@ async function buildServer() {
     }
     reply.send({ status: 'ok', count: users.length });
   });
+
 
   app.post('/users/sync', async (req, reply) => {
     const users = req.body as any;
@@ -122,6 +127,7 @@ async function buildServer() {
     }
     reply.send({ status: 'ok' });
   });
+
   return app;
 }
 
