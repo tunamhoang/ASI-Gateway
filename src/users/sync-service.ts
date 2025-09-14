@@ -21,10 +21,12 @@ function chunk<T>(arr: T[], size: number): T[][] {
   return res;
 }
 
-
-export async function pushFaceFromUrl(device, userId: string, userName: string, faceUrl: string) {
-  const buf = await fetchBufferWithRetry(faceUrl, 3);
-  const b64 = buf.toString('base64');
+export async function addFace(
+  device: any,
+  userId: string,
+  photoBase64: string,
+  userName?: string,
+) {
   const scheme = device.https ? 'https' : 'http';
   const url = `${scheme}://${device.ip}:${device.port}/cgi-bin/FaceInfoManager.cgi?action=add&format=json`;
   const authHeader = {
@@ -32,17 +34,27 @@ export async function pushFaceFromUrl(device, userId: string, userName: string, 
       'Basic ' + Buffer.from(`${device.username}:${device.password}`).toString('base64'),
     'Content-Type': 'application/json',
   };
-  const body = {
-    UserID: userId,
-    Info: { UserName: userName, PhotoData: [b64] },
-  };
+  const info: any = { PhotoData: [photoBase64] };
+  if (userName) info.UserName = userName;
+  const body = { UserID: userId, Info: info };
+  await fetch(url, {
+    method: 'POST',
+    headers: authHeader,
+    body: JSON.stringify(body),
+    timeout: 10000,
+  } as any);
+}
+
+export async function pushFaceFromUrl(
+  device,
+  userId: string,
+  userName: string,
+  faceUrl: string,
+) {
+  const buf = await fetchBufferWithRetry(faceUrl, 3);
+  const photoBase64 = buf.toString('base64');
   try {
-    await fetch(url, {
-      method: 'POST',
-      headers: authHeader,
-      body: JSON.stringify(body),
-      timeout: 10000,
-    } as any);
+    await addFace(device, userId, photoBase64, userName);
   } catch (err) {
     logger.warn({ err, deviceId: device.id, userId }, 'push face failed');
   }
@@ -111,18 +123,8 @@ export async function syncToDevice(
   await Promise.all(
     faceUsers.map((u) =>
       limit(async () => {
-        const url = `${scheme}://${device.ip}:${device.port}/cgi-bin/FaceInfoManager.cgi?action=add&format=json`;
-        const body = {
-          UserID: u.userId,
-          Info: { PhotoData: [u.faceImageBase64] },
-        };
         try {
-          await fetch(url, {
-            method: 'POST',
-            headers: authHeader,
-            body: JSON.stringify(body),
-            timeout: 10000,
-          } as any);
+          await addFace(device, u.userId, u.faceImageBase64!);
         } catch (err) {
           logger.warn(
             { err, deviceId: device.id, userId: u.userId },
