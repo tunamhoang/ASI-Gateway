@@ -4,7 +4,7 @@ import { env } from './core/env.js';
 import { logger } from './core/logger.js';
 import { fetchEmployees } from './cms/hrm-client.js';
 import { syncUsersToAsi } from './users/sync-service.js';
-import { startAlarmTcpServer } from "./alarms/tcp-listener";
+import { startAlarmTcpServer } from "./alarms/tcp-listener.js";
 import { deviceRoutes } from './devices/routes.js';
 
 import { hmacSign } from './core/hmac.js';
