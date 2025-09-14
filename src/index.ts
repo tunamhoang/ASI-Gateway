@@ -12,6 +12,7 @@ import {
   removeDevice,
   refreshStatus,
 } from './devices/device-service.js';
+
 // cast logger to any to satisfy tcp-listener's Console-based signature
 startAlarmTcpServer(logger as any);
 
@@ -22,6 +23,8 @@ async function buildServer() {
 
   app.get('/healthz', async () => ({ status: 'ok' }));
   app.get('/readyz', async () => ({ status: 'ready' }));
+
+  app.register(deviceRoutes);
 
   app.post('/cms/sync-employees', async (req, reply) => {
     const raw = await fetchEmployees();
