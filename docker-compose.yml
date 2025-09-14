@@ -34,6 +34,7 @@ services:
       - .env             # dùng .env thật, đừng dùng .env.example khi chạy
     environment:
       # override để chắc chắn đúng host trong mạng compose
+      NODE_OPTIONS: "--dns-result-order=ipv4first"
       DATABASE_URL: "postgresql://asi:asi@db:5432/asi?schema=public"
       REDIS_URL: "redis://redis:6379"
     depends_on:

@@ -8,6 +8,8 @@ import { startAlarmTcpServer } from "./alarms/tcp-listener.js";
 import { deviceRoutes } from './devices/routes.js';
 
 import { hmacSign } from './core/hmac.js';
+import dns from 'node:dns';
+dns.setDefaultResultOrder('ipv4first');
 
 
 async function buildServer() {
