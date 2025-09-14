@@ -8,4 +8,10 @@ export const env = {
   cmsHmacKey: process.env.CMS_HMAC_KEY || '',
   cmsHrmEndpoint: process.env.CMS_HRM_ENDPOINT || '',
   cmsHrmAuthHeader: process.env.CMS_HRM_AUTH_HEADER || '',
+  inboundBasicUser: process.env.INBOUND_BASIC_USER || '',
+  inboundBasicPass: process.env.INBOUND_BASIC_PASS || '',
+  allowlistCidrs: (process.env.ALLOWLIST_CIDRS || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean),
 };

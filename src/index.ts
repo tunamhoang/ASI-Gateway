@@ -5,8 +5,7 @@ import { logger } from './core/logger.js';
 import { fetchEmployees } from './cms/hrm-client.js';
 import { syncUsersToAsi } from './users/sync-service.js';
 import { startAlarmTcpServer } from "./alarms/tcp-listener";
-// cast logger to any to satisfy tcp-listener's Console-based signature
-startAlarmTcpServer(logger as any);
+import { hmacSign } from './core/hmac.js';
 
 async function buildServer() {
   // Fastify's type definitions expect either a boolean or a specific logger interface.
@@ -15,6 +14,21 @@ async function buildServer() {
 
   app.get('/healthz', async () => ({ status: 'ok' }));
   app.get('/readyz', async () => ({ status: 'ready' }));
+
+  function ipToInt(ip: string): number {
+    return ip.split('.').reduce((acc, oct) => (acc << 8) + Number(oct), 0) >>> 0;
+  }
+
+  function isIpAllowed(ip: string): boolean {
+    if (env.allowlistCidrs.length === 0) return true;
+    const ipInt = ipToInt(ip);
+    return env.allowlistCidrs.some((cidr) => {
+      const [range, bitsStr] = cidr.split('/');
+      const bits = Number(bitsStr);
+      const mask = bits === 0 ? 0 : (~0 << (32 - bits)) >>> 0;
+      return (ipToInt(range) & mask) === (ipInt & mask);
+    });
+  }
 
   app.post('/cms/sync-employees', async (req, reply) => {
     const raw = await fetchEmployees();
@@ -54,12 +68,68 @@ async function buildServer() {
     }
     reply.send({ status: 'ok', count: users.length });
   });
+
+  app.post('/users/sync', async (req, reply) => {
+    const users = req.body as any;
+    if (!Array.isArray(users)) {
+      return reply
+        .status(400)
+        .send({ status: 'error', message: 'invalid body' });
+    }
+    try {
+      await syncUsersToAsi(users);
+    } catch (err) {
+      logger.error({ err }, 'syncUsersToAsi failed');
+      return reply
+        .status(503)
+        .send({ status: 'error', message: 'service unavailable' });
+    }
+    reply.send({ status: 'ok', count: users.length });
+  });
+
+  app.post('/asi/webhook', async (req, reply) => {
+    if (!isIpAllowed(req.ip)) {
+      return reply.status(403).send({ status: 'forbidden' });
+    }
+    if (env.inboundBasicUser) {
+      const auth = req.headers['authorization'];
+      if (!auth || !auth.startsWith('Basic ')) {
+        return reply.status(401).send({ status: 'unauthorized' });
+      }
+      const [user, pass] = Buffer.from(auth.slice(6), 'base64')
+        .toString()
+        .split(':');
+      if (user !== env.inboundBasicUser || pass !== env.inboundBasicPass) {
+        return reply.status(401).send({ status: 'unauthorized' });
+      }
+    }
+    const bodyStr = JSON.stringify(req.body ?? {});
+    const sig = hmacSign(bodyStr, env.cmsHmacKey);
+    try {
+      await fetch(env.cmsEndpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Signature': sig,
+        },
+        body: bodyStr,
+      } as any);
+    } catch (err) {
+      logger.error({ err }, 'forward webhook failed');
+      return reply
+        .status(503)
+        .send({ status: 'error', message: 'service unavailable' });
+    }
+    reply.send({ status: 'ok' });
+  });
   return app;
 }
 
 async function start() {
   const app = await buildServer();
   try {
+    // cast logger to any to satisfy tcp-listener's Console-based signature
+    startAlarmTcpServer(logger as any);
     await app.listen({ port: env.port, host: env.host });
     logger.info(`Server listening on http://${env.host}:${env.port}`);
   } catch (err) {
