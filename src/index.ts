@@ -5,6 +5,7 @@ import { logger } from './core/logger.js';
 import { fetchEmployees } from './cms/hrm-client.js';
 import { syncUsersToAsi } from './users/sync-service.js';
 import { startAlarmTcpServer } from "./alarms/tcp-listener";
+import { deviceRoutes } from './devices/routes.js';
 // cast logger to any to satisfy tcp-listener's Console-based signature
 startAlarmTcpServer(logger as any);
 
@@ -15,6 +16,8 @@ async function buildServer() {
 
   app.get('/healthz', async () => ({ status: 'ok' }));
   app.get('/readyz', async () => ({ status: 'ready' }));
+
+  app.register(deviceRoutes);
 
   app.post('/cms/sync-employees', async (req, reply) => {
     const raw = await fetchEmployees();
