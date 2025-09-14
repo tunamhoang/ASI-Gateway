@@ -5,6 +5,7 @@ import { logger } from './core/logger.js';
 import { fetchEmployees } from './cms/hrm-client.js';
 import { syncUsersToAsi } from './users/sync-service.js';
 import { startAlarmTcpServer } from "./alarms/tcp-listener";
+import { deviceRoutes } from './devices/routes.js';
 
 import { hmacSign } from './core/hmac.js';
 
@@ -16,6 +17,8 @@ async function buildServer() {
 
   app.get('/healthz', async () => ({ status: 'ok' }));
   app.get('/readyz', async () => ({ status: 'ready' }));
+
+  app.register(deviceRoutes);
 
 
   function ipToInt(ip: string): number {
