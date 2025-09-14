@@ -5,11 +5,24 @@ import { fetchEmployees } from './cms/hrm-client.js';
 import { syncUsersToAsi } from './users/sync-service.js';
 import { startAlarmTcpServer } from "./alarms/tcp-listener.js";
 import { deviceRoutes } from './devices/routes.js';
-
+import pLimit from 'p-limit';
 import { hmacSign } from './core/hmac.js';
 import dns from 'node:dns';
 dns.setDefaultResultOrder('ipv4first');
+const httpLimit = pLimit(5);             // bắt đầu 3–5; tăng dần nếu ổn
+const CHUNK = 50;                        // xử lý theo lô để tránh spike
 
+function chunk<T>(arr: T[], size: number) {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+// ví dụ:
+for (const batch of chunk(faceUsers, CHUNK)) {
+  await Promise.all(
+    batch.map(u => httpLimit(() => pushFaceFromUrl(device, u.userId, u.name, u.faceUrl!)))
+  );
+}
 
 async function buildServer() {
   // Fastify's type definitions expect either a boolean or a specific logger interface.
