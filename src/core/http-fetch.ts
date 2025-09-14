@@ -1,14 +1,18 @@
+// src/core/http-fetch.ts
 import { setTimeout as delay } from 'node:timers/promises';
 import { Agent } from 'undici';
 
+type FetchArgs = Parameters<typeof fetch>;
+type FetchInput = FetchArgs[0];
+type FetchInit = NonNullable<FetchArgs[1]>;
+
 const httpAgent = new Agent({
-  // hạn chế kết nối đồng thời / origin để giảm bị reset
-  connections: 8,          // tùy, bắt đầu 6–8 là ổn
+  connections: 8,            // hạn chế kết nối / origin
   pipelining: 0,
-  keepAliveMaxTimeout: 30000,
-  keepAliveTimeout: 10000,
-  headersTimeout: 30000,
-  bodyTimeout: 0,          // dùng AbortController để timeout
+  keepAliveMaxTimeout: 30_000,
+  keepAliveTimeout: 10_000,
+  headersTimeout: 30_000,
+  bodyTimeout: 0,            // timeout sẽ do AbortController lo
 });
 
 function isRetryableError(err: any): boolean {
@@ -27,6 +31,7 @@ function isRetryableError(err: any): boolean {
   );
 }
 
+/** Fetch Buffer với timeout + retry/backoff. */
 export async function fetchBufferWithRetry(
   url: string,
   retries = 3,
@@ -34,13 +39,15 @@ export async function fetchBufferWithRetry(
   init: FetchInit = {},
 ): Promise<Buffer> {
   let lastErr: unknown;
+
   for (let attempt = 0; attempt <= retries; attempt++) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
+
     try {
       const res = await fetch(url as FetchInput, {
         ...init,
-        dispatcher: httpAgent,            // 👈 dùng undici Agent
+        dispatcher: httpAgent,
         signal: controller.signal,
         redirect: 'follow',
         headers: {
@@ -63,14 +70,15 @@ export async function fetchBufferWithRetry(
     } catch (err: any) {
       clearTimeout(timer);
       lastErr = err;
+
       const status = err?.status ?? null;
       const retryable = isRetryableError(err) || status === 429 || (status && status >= 500);
       if (attempt === retries || !retryable) break;
 
-      // Exponential backoff + jitter
       const backoff = Math.min(800 * 2 ** attempt, 8000) + Math.floor(Math.random() * 300);
-      await import('node:timers/promises').then(({ setTimeout }) => setTimeout(backoff));
+      await delay(backoff);
     }
   }
+
   throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
 }
