@@ -5,11 +5,11 @@ import { fetchEmployees } from './cms/hrm-client.js';
 import { syncUsersToAsi } from './users/sync-service.js';
 import { startAlarmTcpServer } from "./alarms/tcp-listener.js";
 import { deviceRoutes } from './devices/routes.js';
-import pLimit from 'p-limit';
 import { hmacSign } from './core/hmac.js';
+import { fetchBufferWithRetry } from './core/http-fetch.js';
+import { httpLimit } from './core/http-limit.js';
 import dns from 'node:dns';
 dns.setDefaultResultOrder('ipv4first');
-const httpLimit = pLimit(5);             // bắt đầu 3–5; tăng dần nếu ổn
 const CHUNK = 50;                        // xử lý theo lô để tránh spike
 
 function chunk<T>(arr: T[], size: number) {
@@ -58,11 +58,8 @@ async function buildServer() {
           e.FaceUrl ?? e.faceUrl ?? e.FaceImageUrl ?? e.faceImageUrl;
         if (!faceImageBase64 && faceUrl) {
           try {
-            const res = await fetch(faceUrl);
-            if (res.ok) {
-              const buf = Buffer.from(await res.arrayBuffer());
-              faceImageBase64 = buf.toString('base64');
-            }
+            const buf = await httpLimit(() => fetchBufferWithRetry(faceUrl, 3, 20_000));
+            faceImageBase64 = buf.toString('base64');
           } catch (err) {
             logger.warn({ err, faceUrl }, 'fetch face image failed');
           }
