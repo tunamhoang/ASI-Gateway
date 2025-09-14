@@ -5,6 +5,13 @@ import { logger } from './core/logger.js';
 import { fetchEmployees } from './cms/hrm-client.js';
 import { syncUsersToAsi } from './users/sync-service.js';
 import { startAlarmTcpServer } from "./alarms/tcp-listener";
+import {
+  registerDevice,
+  listDevices,
+  updateDevice,
+  removeDevice,
+  refreshStatus,
+} from './devices/device-service.js';
 // cast logger to any to satisfy tcp-listener's Console-based signature
 startAlarmTcpServer(logger as any);
 
@@ -54,6 +61,130 @@ async function buildServer() {
     }
     reply.send({ status: 'ok', count: users.length });
   });
+
+  const deviceSchema = {
+    type: 'object',
+    properties: {
+      id: { type: 'string' },
+      name: { type: 'string' },
+      ip: { type: 'string' },
+      port: { type: 'number' },
+      username: { type: 'string' },
+      password: { type: 'string' },
+      https: { type: 'boolean' },
+      lastSeenAt: { type: ['string', 'null'], format: 'date-time' },
+      status: { type: 'string' },
+      createdAt: { type: 'string', format: 'date-time' },
+      updatedAt: { type: 'string', format: 'date-time' },
+    },
+  } as const;
+
+  const deviceInputSchema = {
+    type: 'object',
+    required: ['name', 'ip', 'username', 'password'],
+    properties: {
+      name: { type: 'string' },
+      ip: { type: 'string' },
+      port: { type: 'number' },
+      username: { type: 'string' },
+      password: { type: 'string' },
+      https: { type: 'boolean' },
+    },
+    additionalProperties: false,
+  } as const;
+
+  const deviceUpdateSchema = {
+    type: 'object',
+    properties: {
+      name: { type: 'string' },
+      ip: { type: 'string' },
+      port: { type: 'number' },
+      username: { type: 'string' },
+      password: { type: 'string' },
+      https: { type: 'boolean' },
+    },
+    additionalProperties: false,
+  } as const;
+
+  const idParamSchema = {
+    type: 'object',
+    required: ['id'],
+    properties: { id: { type: 'string' } },
+  } as const;
+
+  app.get(
+    '/devices',
+    {
+      schema: { response: { 200: { type: 'array', items: deviceSchema } } },
+    },
+    async (_req, reply) => {
+      try {
+        const devices = await listDevices();
+        return devices;
+      } catch (err) {
+        reply.status(500).send({ message: 'failed to list devices' });
+      }
+    },
+  );
+
+  app.post(
+    '/devices',
+    { schema: { body: deviceInputSchema, response: { 201: deviceSchema } } },
+    async (req, reply) => {
+      try {
+        const device = await registerDevice(req.body as any);
+        reply.code(201).send(device);
+      } catch (err) {
+        reply.status(500).send({ message: 'failed to register device' });
+      }
+    },
+  );
+
+  app.patch(
+    '/devices/:id',
+    { schema: { params: idParamSchema, body: deviceUpdateSchema } },
+    async (req, reply) => {
+      const { id } = req.params as { id: string };
+      try {
+        const device = await updateDevice(id, req.body as any);
+        reply.send(device);
+      } catch (err) {
+        reply.status(404).send({ message: 'device not found' });
+      }
+    },
+  );
+
+  app.delete(
+    '/devices/:id',
+    { schema: { params: idParamSchema } },
+    async (req, reply) => {
+      const { id } = req.params as { id: string };
+      try {
+        await removeDevice(id);
+        reply.status(204).send();
+      } catch (err) {
+        reply.status(404).send({ message: 'device not found' });
+      }
+    },
+  );
+
+  app.post(
+    '/devices/:id/test-connection',
+    { schema: { params: idParamSchema } },
+    async (req, reply) => {
+      const { id } = req.params as { id: string };
+      try {
+        const device = await refreshStatus(id);
+        if (!device) {
+          reply.status(404).send({ message: 'device not found' });
+          return;
+        }
+        reply.send({ status: device.status });
+      } catch (err) {
+        reply.status(500).send({ message: 'failed to test connection' });
+      }
+    },
+  );
   return app;
 }
 
