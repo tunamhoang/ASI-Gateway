@@ -8,6 +8,10 @@ vi.mock('../src/devices/index.js', () => ({
   listDevices: vi.fn(() => Promise.reject(new Error('db down')))
 }));
 
+vi.mock('../src/users/user-service.js', () => ({
+  upsertUsers: vi.fn(() => Promise.resolve()),
+}));
+
 import { buildServer } from '../src/index.js';
 
 describe('POST /cms/sync-employees fallback', () => {

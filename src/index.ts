@@ -3,6 +3,7 @@ import { env } from './core/env.js';
 import { logger } from './core/logger.js';
 import { fetchEmployees } from './cms/hrm-client.js';
 import { syncUsersToAsi } from './users/sync-service.js';
+import { upsertUsers } from './users/user-service.js';
 import { startAlarmTcpServer } from "./alarms/tcp-listener.js";
 import { deviceRoutes } from './devices/routes.js';
 import { hmacSign } from './core/hmac.js';
@@ -73,6 +74,7 @@ async function buildServer() {
       })
     );
     try {
+      await upsertUsers(users);
       await syncUsersToAsi(users);
     } catch (err) {
       logger.error({ err }, 'syncUsersToAsi failed');
