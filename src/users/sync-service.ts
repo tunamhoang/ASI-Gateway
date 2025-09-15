@@ -1,8 +1,9 @@
-import pLimit from 'p-limit';
-import { logger } from '../core/logger.js';
-import { listDevices } from '../devices/index.js';
-import { fetchBufferWithRetry } from '../core/http-fetch.js';
-import { httpLimit } from '../core/http-limit.js';
+import pLimit from "p-limit";
+import { createHash, randomBytes } from "node:crypto";
+import { logger } from "../core/logger.js";
+import { listDevices } from "../devices/index.js";
+import { fetchBufferWithRetry } from "../core/http-fetch.js";
+import { httpLimit } from "../core/http-limit.js";
 
 export interface DeviceConn {
   id: string | number;
@@ -27,7 +28,11 @@ function chunk<T>(arr: T[], size: number): T[][] {
   return out;
 }
 
-async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit = {}, timeoutMs = 10_000) {
+async function fetchWithTimeout(
+  input: RequestInfo | URL,
+  init: RequestInit = {},
+  timeoutMs = 10_000,
+) {
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -38,16 +43,88 @@ async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit = {}
   }
 }
 
-function basicAuth(device: DeviceConn) {
-  return 'Basic ' + Buffer.from(`${device.username}:${device.password}`).toString('base64');
+function md5(str: string) {
+  return createHash("md5").update(str).digest("hex");
+}
+
+function parseDigest(header: string) {
+  return header
+    .replace(/^Digest\s+/i, "")
+    .split(/,\s*/)
+    .reduce(
+      (acc: Record<string, string>, cur) => {
+        const eq = cur.indexOf("=");
+        if (eq > 0) {
+          const key = cur.slice(0, eq).trim();
+          const val = cur
+            .slice(eq + 1)
+            .trim()
+            .replace(/^"|"$/g, "");
+          acc[key] = val;
+        }
+        return acc;
+      },
+      {} as Record<string, string>,
+    );
+}
+
+async function fetchWithDigest(
+  device: DeviceConn,
+  url: string,
+  init: RequestInit = {},
+  timeoutMs = 10_000,
+) {
+  // First request to obtain nonce
+  const res1 = await fetchWithTimeout(
+    url,
+    { ...init, headers: { ...(init.headers || {}) } },
+    timeoutMs,
+  );
+  if (res1.status !== 401) return res1;
+
+  const authHeader = res1.headers.get("www-authenticate");
+  if (!authHeader) return res1;
+  res1.body?.cancel();
+
+  const params = parseDigest(authHeader);
+  const method = (init.method || "GET").toUpperCase();
+  const uri = new URL(url).pathname + new URL(url).search;
+  const nc = "00000001";
+  const cnonce = randomBytes(8).toString("hex");
+  const ha1 = md5(`${device.username}:${params.realm}:${device.password}`);
+  const ha2 = md5(`${method}:${uri}`);
+  const response = md5(
+    `${ha1}:${params.nonce}:${nc}:${cnonce}:${params.qop}:${ha2}`,
+  );
+
+  let header =
+    `Digest username="${device.username}", realm="${params.realm}", nonce="${params.nonce}", uri="${uri}", ` +
+    `qop=${params.qop}, nc=${nc}, cnonce="${cnonce}", response="${response}"`;
+  if (params.opaque) header += `, opaque="${params.opaque}"`;
+
+  const headers = { ...(init.headers || {}), Authorization: header } as Record<
+    string,
+    string
+  >;
+  return fetchWithTimeout(url, { ...init, headers }, timeoutMs);
 }
 
 async function assertOk(res: Response, ctx: Record<string, unknown>) {
   if (!res.ok) {
-    let bodyText = '';
-    try { bodyText = await res.text(); } catch {}
+    let bodyText = "";
+    try {
+      bodyText = await res.text();
+    } catch {}
     const err = new Error(`HTTP ${res.status} ${res.statusText}`);
-    logger.warn({ ...ctx, status: res.status, statusText: res.statusText, body: bodyText.slice(0, 500) }, 'request failed');
+    logger.warn(
+      {
+        ...ctx,
+        status: res.status,
+        statusText: res.statusText,
+        body: bodyText.slice(0, 500),
+      },
+      "request failed",
+    );
     throw err;
   }
 }
@@ -58,11 +135,10 @@ export async function addFace(
   photoBase64: string,
   userName?: string,
 ) {
-  const scheme = device.https ? 'https' : 'http';
+  const scheme = device.https ? "https" : "http";
   const url = `${scheme}://${device.ip}:${device.port}/cgi-bin/FaceInfoManager.cgi?action=add&format=json`;
   const headers = {
-    Authorization: basicAuth(device),
-    'Content-Type': 'application/json',
+    "Content-Type": "application/json",
   } as const;
 
   const info: Record<string, unknown> = { PhotoData: [photoBase64] };
@@ -70,8 +146,17 @@ export async function addFace(
 
   const body = { UserID: userId, Info: info };
 
-  const res = await fetchWithTimeout(url, { method: 'POST', headers, body: JSON.stringify(body) }, 10_000);
-  await assertOk(res, { deviceId: device.id, userId, api: 'FaceInfoManager.add' });
+  const res = await fetchWithDigest(
+    device,
+    url,
+    { method: "POST", headers, body: JSON.stringify(body) },
+    10_000,
+  );
+  await assertOk(res, {
+    deviceId: device.id,
+    userId,
+    api: "FaceInfoManager.add",
+  });
 }
 
 export async function pushFaceFromUrl(
@@ -82,10 +167,13 @@ export async function pushFaceFromUrl(
 ) {
   try {
     const buf = await fetchBufferWithRetry(faceUrl, 3);
-    const photoBase64 = buf.toString('base64');
+    const photoBase64 = buf.toString("base64");
     await addFace(device, userId, photoBase64, userName);
   } catch (err) {
-    logger.warn({ err, deviceId: device.id, userId, faceUrl }, 'push face failed');
+    logger.warn(
+      { err, deviceId: device.id, userId, faceUrl },
+      "push face failed",
+    );
   }
 }
 
@@ -93,18 +181,20 @@ export async function syncUsersToAsi(
   users: UserSyncItem[],
   deviceConcurrency = 5,
 ): Promise<void> {
-  logger.info({ count: users.length }, 'syncUsersToAsi triggered');
+  logger.info({ count: users.length }, "syncUsersToAsi triggered");
 
   let devices: DeviceConn[];
   try {
     devices = (await listDevices()) as DeviceConn[];
   } catch (err) {
-    logger.error({ err }, 'listDevices failed');
+    logger.error({ err }, "listDevices failed");
     throw err;
   }
 
   const limit = pLimit(deviceConcurrency);
-  await Promise.all(devices.map((device) => limit(() => syncToDevice(device, users))));
+  await Promise.all(
+    devices.map((device) => limit(() => syncToDevice(device, users))),
+  );
 }
 
 export async function syncToDevice(
@@ -112,10 +202,9 @@ export async function syncToDevice(
   users: UserSyncItem[],
   requestConcurrency = 5,
 ) {
-  const scheme = device.https ? 'https' : 'http';
+  const scheme = device.https ? "https" : "http";
   const headers = {
-    Authorization: basicAuth(device),
-    'Content-Type': 'application/json',
+    "Content-Type": "application/json",
   } as const;
 
   const limit = pLimit(requestConcurrency);
@@ -138,10 +227,19 @@ export async function syncToDevice(
         };
 
         try {
-          const res = await fetchWithTimeout(url, { method: 'POST', headers, body: JSON.stringify(body) }, 10_000);
-          await assertOk(res, { deviceId: device.id, api: 'AccessUser.insertMulti', users: body.UserData.length });
+          const res = await fetchWithDigest(
+            device,
+            url,
+            { method: "POST", headers, body: JSON.stringify(body) },
+            10_000,
+          );
+          await assertOk(res, {
+            deviceId: device.id,
+            api: "AccessUser.insertMulti",
+            users: body.UserData.length,
+          });
         } catch (err) {
-          logger.warn({ err, deviceId: device.id }, 'insertMulti failed');
+          logger.warn({ err, deviceId: device.id }, "insertMulti failed");
         }
       }),
     ),
@@ -159,7 +257,10 @@ export async function syncToDevice(
             await pushFaceFromUrl(device, u.userId, u.name, u.faceUrl);
           }
         } catch (err) {
-          logger.warn({ err, deviceId: device.id, userId: u.userId }, 'push face (direct) failed');
+          logger.warn(
+            { err, deviceId: device.id, userId: u.userId },
+            "push face (direct) failed",
+          );
         }
       }),
     ),
