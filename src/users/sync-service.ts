@@ -141,6 +141,19 @@ export async function addFace(
     "Content-Type": "application/json",
   } as const;
 
+  if (typeof userId !== "string" || userId.trim() === "") {
+    logger.warn({ deviceId: device.id, userId }, "addFace skipped: invalid userId");
+    return;
+  }
+  const base64Regex = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+  if (typeof photoBase64 !== "string" || !base64Regex.test(photoBase64)) {
+    logger.warn(
+      { deviceId: device.id, userId },
+      "addFace skipped: invalid photoBase64",
+    );
+    return;
+  }
+
   const info: Record<string, unknown> = { PhotoData: [photoBase64] };
   if (userName) info.UserName = userName;
 

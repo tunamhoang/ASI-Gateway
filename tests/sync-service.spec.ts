@@ -23,7 +23,7 @@ describe('syncUsersToAsi', () => {
     fetch.mockImplementation(
       () => new Promise((res) => setTimeout(() => res({ ok: true }), 50)),
     );
-    const users = [{ userId: '1', name: 'A', faceImageBase64: 'x' }];
+    const users = [{ userId: '1', name: 'A', faceImageBase64: 'eA==' }];
     const start = Date.now();
     await syncUsersToAsi(users);
     const duration = Date.now() - start;
@@ -47,7 +47,7 @@ describe('syncToDevice', () => {
     const users = Array.from({ length: 4 }, (_, i) => ({
       userId: String(i),
       name: `U${i}`,
-      faceImageBase64: 'x',
+      faceImageBase64: 'eA==',
     }));
     const start = Date.now();
     await syncToDevice(device, users, 2);
