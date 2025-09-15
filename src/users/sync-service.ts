@@ -141,22 +141,62 @@ export async function addFace(
     "Content-Type": "application/json",
   } as const;
 
+  if (typeof userId !== "string" || userId.trim() === "") {
+    logger.warn({ deviceId: device.id, userId }, "addFace skipped: invalid userId");
+    return;
+  }
+  if (typeof photoBase64 !== "string" || photoBase64.trim() === "") {
+    logger.warn(
+      { deviceId: device.id, userId },
+      "addFace skipped: invalid photoBase64",
+    );
+    return;
+  }
+  try {
+    const buf = Buffer.from(photoBase64, "base64");
+    // re-encode to ensure string was valid base64 without extra noise
+    if (buf.length === 0 || buf.toString("base64") !== photoBase64.replace(/\s+/g, "")) {
+      logger.warn(
+        { deviceId: device.id, userId },
+        "addFace skipped: invalid photoBase64",
+      );
+      return;
+    }
+  } catch {
+    logger.warn(
+      { deviceId: device.id, userId },
+      "addFace skipped: invalid photoBase64",
+    );
+    return;
+  }
+
   const info: Record<string, unknown> = { PhotoData: [photoBase64] };
   if (userName) info.UserName = userName;
 
   const body = { UserID: userId, Info: info };
 
-  const res = await fetchWithDigest(
-    device,
-    url,
-    { method: "POST", headers, body: JSON.stringify(body) },
-    10_000,
-  );
-  await assertOk(res, {
-    deviceId: device.id,
-    userId,
-    api: "FaceInfoManager.add",
-  });
+  let attempt = 0;
+  for (;;) {
+    try {
+      const res = await fetchWithDigest(
+        device,
+        url,
+        { method: "POST", headers, body: JSON.stringify(body) },
+        10_000,
+      );
+      await assertOk(res, {
+        deviceId: device.id,
+        userId,
+        api: "FaceInfoManager.add",
+      });
+      break;
+    } catch (err) {
+      attempt += 1;
+      logger.warn({ err, deviceId: device.id, userId, attempt }, "addFace request failed");
+      if (attempt >= 3) throw err;
+      await new Promise((r) => setTimeout(r, attempt * 200));
+    }
+  }
 }
 
 export async function pushFaceFromUrl(

@@ -12,7 +12,8 @@ vi.mock('../src/devices/index.js', () => ({
   ),
 }));
 
-import { syncUsersToAsi, syncToDevice } from '../src/users/sync-service.js';
+import { syncUsersToAsi, syncToDevice, addFace } from '../src/users/sync-service.js';
+import { logger } from '../src/core/logger.js';
 
 beforeEach(() => {
   fetch.mockReset();
@@ -23,7 +24,7 @@ describe('syncUsersToAsi', () => {
     fetch.mockImplementation(
       () => new Promise((res) => setTimeout(() => res({ ok: true }), 50)),
     );
-    const users = [{ userId: '1', name: 'A', faceImageBase64: 'x' }];
+    const users = [{ userId: '1', name: 'A', faceImageBase64: 'eA==' }];
     const start = Date.now();
     await syncUsersToAsi(users);
     const duration = Date.now() - start;
@@ -47,7 +48,7 @@ describe('syncToDevice', () => {
     const users = Array.from({ length: 4 }, (_, i) => ({
       userId: String(i),
       name: `U${i}`,
-      faceImageBase64: 'x',
+      faceImageBase64: 'eA==',
     }));
     const start = Date.now();
     await syncToDevice(device, users, 2);
@@ -56,5 +57,40 @@ describe('syncToDevice', () => {
     expect(duration).toBeLessThan(220);
     const insertBody = JSON.parse(fetch.mock.calls[0][1].body);
     expect(insertBody.UserData).toHaveLength(4);
+  });
+});
+
+describe('addFace validation', () => {
+  const device = {
+    id: 'd1',
+    ip: '1.2.3.4',
+    port: 80,
+    username: 'u',
+    password: 'p',
+    https: false,
+  };
+
+  it('warns and skips when userId is empty', async () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    await addFace(device, '', 'eA==');
+    expect(warn).toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('warns and skips when photoBase64 is invalid', async () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    await addFace(device, '1', 'notBase64');
+    expect(warn).toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('warns and skips when photoBase64 is empty', async () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    await addFace(device, '1', '');
+    expect(warn).toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+    warn.mockRestore();
   });
 });
