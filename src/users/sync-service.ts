@@ -145,6 +145,7 @@ export async function addFace(
     logger.warn({ deviceId: device.id, userId }, "addFace skipped: invalid userId");
     return;
   }
+
   if (typeof photoBase64 !== "string" || photoBase64.trim() === "") {
     logger.warn(
       { deviceId: device.id, userId },
@@ -163,6 +164,7 @@ export async function addFace(
       return;
     }
   } catch {
+
     logger.warn(
       { deviceId: device.id, userId },
       "addFace skipped: invalid photoBase64",
