@@ -7,8 +7,9 @@
 
 ## Tích hợp CMS
 
-- Cấu hình các biến môi trường `CMS_ENDPOINT`, `CMS_HMAC_KEY`, `CMS_HRM_ENDPOINT`, `CMS_HRM_AUTH_HEADER`.
-- Sau khi khởi động gateway, gọi `POST /cms/sync-employees` để đồng bộ nhân viên từ CMS sang các thiết bị ASI.
+- Cấu hình các biến môi trường `CMS_ENDPOINT`, `CMS_HMAC_KEY`, `CMS_HRM_ENDPOINT`, `CMS_HRM_AUTH_HEADER` và `DATABASE_URL`.
+- Chạy `npx prisma migrate deploy` để khởi tạo database.
+- Sau khi khởi động gateway, gọi `POST /cms/sync-employees` để tải nhân viên từ CMS, lưu vào DB rồi mới đồng bộ sang các thiết bị ASI.
 
 ## Câu lệnh sử dụng
 

@@ -3,14 +3,26 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const fetchMock = vi.fn();
 vi.stubGlobal('fetch', fetchMock);
 
+const fetchEmployeesMock = vi.fn();
+vi.mock('../src/cms/hrm-client.js', () => ({
+  fetchEmployees: fetchEmployeesMock,
+}));
+
 const syncUsersToAsiMock = vi.fn();
 vi.mock('../src/users/sync-service.js', () => ({
   syncUsersToAsi: syncUsersToAsiMock,
 }));
 
+const upsertUsersMock = vi.fn();
+vi.mock('../src/users/user-service.js', () => ({
+  upsertUsers: upsertUsersMock,
+}));
+
 beforeEach(() => {
   fetchMock.mockReset();
+  fetchEmployeesMock.mockReset();
   syncUsersToAsiMock.mockReset();
+  upsertUsersMock.mockReset();
   vi.resetModules();
   delete process.env.CMS_ENDPOINT;
   delete process.env.CMS_HMAC_KEY;
@@ -33,6 +45,24 @@ describe('POST /users/sync', () => {
     });
     expect(res.statusCode).toBe(200);
     expect(syncUsersToAsiMock).toHaveBeenCalledWith(users);
+  });
+});
+
+describe('POST /cms/sync-employees', () => {
+  it('upserts employees before syncing to ASI', async () => {
+    process.env.CMS_ENDPOINT = '';
+    process.env.CMS_HMAC_KEY = '';
+    fetchEmployeesMock.mockResolvedValue([{ EmployeeID: 1, FullName: 'A' }]);
+    const { buildServer } = await import('../src/index.js');
+    const app = await buildServer();
+    const res = await app.inject({ method: 'POST', url: '/cms/sync-employees' });
+    expect(res.statusCode).toBe(200);
+    const expected = [{ userId: '1', name: 'A', citizenIdNo: undefined, faceImageBase64: undefined }];
+    expect(upsertUsersMock).toHaveBeenCalledWith(expected);
+    expect(syncUsersToAsiMock).toHaveBeenCalledWith(expected);
+    expect(upsertUsersMock.mock.invocationCallOrder[0]).toBeLessThan(
+      syncUsersToAsiMock.mock.invocationCallOrder[0],
+    );
   });
 });
 
