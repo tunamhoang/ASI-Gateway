@@ -12,7 +12,7 @@ vi.mock('../src/devices/index.js', () => ({
   ),
 }));
 
-import { syncUsersToAsi, syncToDevice, addFace } from '../src/users/sync-service.js';
+import { syncUsersToAsi, syncToDevice, upsertFace } from '../src/users/sync-service.js';
 import { logger } from '../src/core/logger.js';
 
 beforeEach(() => {
@@ -22,9 +22,21 @@ beforeEach(() => {
 describe('syncUsersToAsi', () => {
   it('processes multiple devices in parallel', async () => {
     fetch.mockImplementation(
-      () => new Promise((res) => setTimeout(() => res({ ok: true }), 50)),
+      () =>
+        new Promise((res) =>
+          setTimeout(
+            () =>
+              res({
+                ok: true,
+                status: 200,
+                text: () => Promise.resolve('OK'),
+              }),
+            50,
+          ),
+        ),
     );
-    const users = [{ userId: '1', name: 'A', faceImageBase64: 'eA==' }];
+    const jpegBase64 = '/9j/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAj/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFAEBAAAAAAAAAAAAAAAAAAAAAP/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/AKpAB//Z';
+    const users = [{ userId: '1', name: 'A', faceImageBase64: jpegBase64 }];
     const start = Date.now();
     await syncUsersToAsi(users);
     const duration = Date.now() - start;
@@ -36,7 +48,18 @@ describe('syncUsersToAsi', () => {
 describe('syncToDevice', () => {
   it('batches and sends face requests with a concurrency limit', async () => {
     fetch.mockImplementation(
-      () => new Promise((res) => setTimeout(() => res({ ok: true }), 50)),
+      () =>
+        new Promise((res) =>
+          setTimeout(
+            () =>
+              res({
+                ok: true,
+                status: 200,
+                text: () => Promise.resolve('OK'),
+              }),
+            50,
+          ),
+        ),
     );
     const device = {
       ip: '1.2.3.4',
@@ -45,10 +68,11 @@ describe('syncToDevice', () => {
       password: 'p',
       https: false,
     };
+    const jpegBase64 = '/9j/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAj/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFAEBAAAAAAAAAAAAAAAAAAAAAP/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/AKpAB//Z';
     const users = Array.from({ length: 4 }, (_, i) => ({
       userId: String(i),
       name: `U${i}`,
-      faceImageBase64: 'eA==',
+      faceImageBase64: jpegBase64,
     }));
     const start = Date.now();
     await syncToDevice(device, users, 2);
@@ -60,7 +84,7 @@ describe('syncToDevice', () => {
   });
 });
 
-describe('addFace validation', () => {
+describe('upsertFace validation', () => {
   const device = {
     id: 'd1',
     ip: '1.2.3.4',
@@ -72,7 +96,8 @@ describe('addFace validation', () => {
 
   it('warns and skips when userId is empty', async () => {
     const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
-    await addFace(device, '', 'eA==');
+    const jpegBase64 = '/9j/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAj/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFAEBAAAAAAAAAAAAAAAAAAAAAP/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/AKpAB//Z';
+    await upsertFace(device, '', jpegBase64);
     expect(warn).toHaveBeenCalled();
     expect(fetch).not.toHaveBeenCalled();
     warn.mockRestore();
@@ -80,7 +105,7 @@ describe('addFace validation', () => {
 
   it('warns and skips when photoBase64 is invalid', async () => {
     const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
-    await addFace(device, '1', 'notBase64');
+    await upsertFace(device, '1', 'notBase64');
     expect(warn).toHaveBeenCalled();
     expect(fetch).not.toHaveBeenCalled();
     warn.mockRestore();
@@ -88,9 +113,43 @@ describe('addFace validation', () => {
 
   it('warns and skips when photoBase64 is empty', async () => {
     const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
-    await addFace(device, '1', '');
+    await upsertFace(device, '1', '');
     expect(warn).toHaveBeenCalled();
     expect(fetch).not.toHaveBeenCalled();
     warn.mockRestore();
+  });
+  it('warns and skips when photoBase64 is not JPEG', async () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    await upsertFace(device, '1', Buffer.from('hello').toString('base64'));
+    expect(warn).toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('warns and skips when photoBase64 exceeds 200k chars', async () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    await upsertFace(device, '1', 'a'.repeat(200001));
+    expect(warn).toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('calls update when add returns 400', async () => {
+    fetch
+      .mockResolvedValueOnce({
+        status: 400,
+        ok: false,
+        text: () => Promise.resolve('Bad Request'),
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        ok: true,
+        text: () => Promise.resolve('OK'),
+      });
+    const jpegBase64 = '/9j/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAj/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFAEBAAAAAAAAAAAAAAAAAAAAAP/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/AKpAB//Z';
+    await upsertFace(device, '1', jpegBase64);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch.mock.calls[0][0]).toContain('action=add');
+    expect(fetch.mock.calls[1][0]).toContain('action=update');
   });
 });
