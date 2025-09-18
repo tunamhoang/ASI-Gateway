@@ -17,8 +17,14 @@ beforeEach(() => {
 
 describe('pushFaceFromUrl', () => {
   it('sends base64 image to device', async () => {
-    fetchBufferWithRetry.mockResolvedValue(Buffer.from('image'));
-    fetchMock.mockResolvedValue({ ok: true });
+    const jpegBase64 = '/9j/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAj/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFAEBAAAAAAAAAAAAAAAAAAAAAP/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/AKpAB//Z';
+    const jpegBuffer = Buffer.from(jpegBase64, 'base64');
+    fetchBufferWithRetry.mockResolvedValue(jpegBuffer);
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: () => Promise.resolve('OK'),
+    });
     const device = {
       ip: '1.2.3.4',
       port: 80,
@@ -33,12 +39,13 @@ describe('pushFaceFromUrl', () => {
     const body = JSON.parse(opts.body);
     expect(body).toEqual({
       UserID: '1',
-      Info: { UserName: 'U1', PhotoData: [Buffer.from('image').toString('base64')] },
+      Info: { UserName: 'U1', PhotoData: [jpegBase64] },
     });
   });
 
   it('logs warning when upload fails', async () => {
-    fetchBufferWithRetry.mockResolvedValue(Buffer.from('img'));
+    const jpegBase64 = '/9j/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAj/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFAEBAAAAAAAAAAAAAAAAAAAAAP/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/AKpAB//Z';
+    fetchBufferWithRetry.mockResolvedValue(Buffer.from(jpegBase64, 'base64'));
     fetchMock.mockRejectedValue(new Error('fail'));
     const device = {
       id: 'd1',

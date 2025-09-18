@@ -129,45 +129,70 @@ async function assertOk(res: Response, ctx: Record<string, unknown>) {
   }
 }
 
-export async function addFace(
+export async function upsertFace(
   device: DeviceConn,
   userId: string,
   photoBase64: string,
   userName?: string,
 ) {
   const scheme = device.https ? "https" : "http";
-  const url = `${scheme}://${device.ip}:${device.port}/cgi-bin/FaceInfoManager.cgi?action=add&format=json`;
+  const baseUrl = `${scheme}://${device.ip}:${device.port}/cgi-bin/FaceInfoManager.cgi`;
   const headers = {
     "Content-Type": "application/json",
   } as const;
 
   if (typeof userId !== "string" || userId.trim() === "") {
-    logger.warn({ deviceId: device.id, userId }, "addFace skipped: invalid userId");
+    logger.warn({ deviceId: device.id, userId }, "upsertFace skipped: invalid userId");
     return;
   }
 
   if (typeof photoBase64 !== "string" || photoBase64.trim() === "") {
     logger.warn(
       { deviceId: device.id, userId },
-      "addFace skipped: invalid photoBase64",
+      "upsertFace skipped: invalid photoBase64",
     );
     return;
   }
+
+  if (/\r|\n/.test(photoBase64)) {
+    logger.warn(
+      { deviceId: device.id, userId },
+      "upsertFace skipped: multiline photoBase64",
+    );
+    return;
+  }
+
+  if (photoBase64.length > 200_000) {
+    logger.warn(
+      { deviceId: device.id, userId },
+      "upsertFace skipped: photoBase64 too long",
+    );
+    return;
+  }
+
+  let buf: Buffer;
   try {
-    const buf = Buffer.from(photoBase64, "base64");
+    buf = Buffer.from(photoBase64, "base64");
     // re-encode to ensure string was valid base64 without extra noise
-    if (buf.length === 0 || buf.toString("base64") !== photoBase64.replace(/\s+/g, "")) {
+    if (buf.length === 0 || buf.toString("base64") !== photoBase64) {
       logger.warn(
         { deviceId: device.id, userId },
-        "addFace skipped: invalid photoBase64",
+        "upsertFace skipped: invalid photoBase64",
       );
       return;
     }
   } catch {
-
     logger.warn(
       { deviceId: device.id, userId },
-      "addFace skipped: invalid photoBase64",
+      "upsertFace skipped: invalid photoBase64",
+    );
+    return;
+  }
+
+  if (!(buf[0] === 0xff && buf[1] === 0xd8)) {
+    logger.warn(
+      { deviceId: device.id, userId },
+      "upsertFace skipped: photo not JPEG",
     );
     return;
   }
@@ -177,28 +202,31 @@ export async function addFace(
 
   const body = { UserID: userId, Info: info };
 
-  let attempt = 0;
-  for (;;) {
-    try {
-      const res = await fetchWithDigest(
-        device,
-        url,
-        { method: "POST", headers, body: JSON.stringify(body) },
-        10_000,
-      );
-      await assertOk(res, {
-        deviceId: device.id,
-        userId,
-        api: "FaceInfoManager.add",
-      });
-      break;
-    } catch (err) {
-      attempt += 1;
-      logger.warn({ err, deviceId: device.id, userId, attempt }, "addFace request failed");
-      if (attempt >= 3) throw err;
-      await new Promise((r) => setTimeout(r, attempt * 200));
-    }
+  let addText = "";
+  try {
+    const addRes = await fetchWithDigest(
+      device,
+      `${baseUrl}?action=add&format=json`,
+      { method: "POST", headers, body: JSON.stringify(body) },
+      10_000,
+    );
+    addText = await addRes.text();
+    if (addRes.status === 200 && /OK/i.test(addText)) return;
+  } catch (err) {
+    logger.warn({ err, deviceId: device.id, userId }, "upsertFace add failed");
   }
+
+  const updRes = await fetchWithDigest(
+    device,
+    `${baseUrl}?action=update&format=json`,
+    { method: "POST", headers, body: JSON.stringify(body) },
+    10_000,
+  );
+  const updText = await updRes.text();
+  if (updRes.status === 200 && /OK/i.test(updText)) return;
+  throw new Error(
+    `face upsert failed: add=${addText.slice(0, 200)} | update=${updRes.status} ${updText.slice(0, 200)}`,
+  );
 }
 
 export async function pushFaceFromUrl(
@@ -210,7 +238,7 @@ export async function pushFaceFromUrl(
   try {
     const buf = await fetchBufferWithRetry(faceUrl, 3);
     const photoBase64 = buf.toString("base64");
-    await addFace(device, userId, photoBase64, userName);
+    await upsertFace(device, userId, photoBase64, userName);
   } catch (err) {
     logger.warn(
       { err, deviceId: device.id, userId, faceUrl },
@@ -294,7 +322,7 @@ export async function syncToDevice(
       httpLimit(async () => {
         try {
           if (u.faceImageBase64) {
-            await addFace(device, u.userId, u.faceImageBase64, u.name);
+            await upsertFace(device, u.userId, u.faceImageBase64, u.name);
           } else if (u.faceUrl) {
             await pushFaceFromUrl(device, u.userId, u.name, u.faceUrl);
           }
