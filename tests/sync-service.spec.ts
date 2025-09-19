@@ -1,4 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest';
+import sharp from 'sharp';
 
 const fetch = vi.fn();
 vi.stubGlobal('fetch', fetch);
@@ -12,23 +13,66 @@ vi.mock('../src/devices/index.js', () => ({
   ),
 }));
 
-import { syncUsersToAsi, syncToDevice, addFace } from '../src/users/sync-service.js';
+const dahuaFaceMock = vi.hoisted(() => ({
+  upsertFace: vi.fn(),
+}));
+
+vi.mock('../src/devices/dahua-face.js', () => dahuaFaceMock);
+
+import { syncUsersToAsi, syncToDevice, upsertFace } from '../src/users/sync-service.js';
 import { logger } from '../src/core/logger.js';
+
+const deviceUpsertFace = dahuaFaceMock.upsertFace;
 
 beforeEach(() => {
   fetch.mockReset();
+  deviceUpsertFace.mockReset();
+});
+
+let jpegBase64: string;
+
+beforeAll(async () => {
+  const buf = await sharp({
+    create: {
+      width: 320,
+      height: 320,
+      channels: 3,
+      background: { r: 0, g: 0, b: 0 },
+    },
+  })
+    .jpeg()
+    .toBuffer();
+  jpegBase64 = buf.toString('base64');
 });
 
 describe('syncUsersToAsi', () => {
   it('processes multiple devices in parallel', async () => {
     fetch.mockImplementation(
-      () => new Promise((res) => setTimeout(() => res({ ok: true }), 50)),
+      () =>
+        new Promise((res) =>
+          setTimeout(
+            () =>
+              res({
+                ok: true,
+                status: 200,
+                text: () => Promise.resolve('OK'),
+              }),
+            50,
+          ),
+        ),
     );
-    const users = [{ userId: '1', name: 'A', faceImageBase64: 'eA==' }];
+    deviceUpsertFace.mockImplementation(
+      () =>
+        new Promise((res) =>
+          setTimeout(() => res('added'), 50),
+        ),
+    );
+    const users = [{ userId: '1', name: 'A', faceImageBase64: jpegBase64 }];
     const start = Date.now();
     await syncUsersToAsi(users);
     const duration = Date.now() - start;
-    expect(fetch.mock.calls.length).toBe(4);
+    expect(fetch.mock.calls.length).toBe(2);
+    expect(deviceUpsertFace).toHaveBeenCalledTimes(2);
     expect(duration).toBeLessThan(150);
   });
 });
@@ -36,7 +80,24 @@ describe('syncUsersToAsi', () => {
 describe('syncToDevice', () => {
   it('batches and sends face requests with a concurrency limit', async () => {
     fetch.mockImplementation(
-      () => new Promise((res) => setTimeout(() => res({ ok: true }), 50)),
+      () =>
+        new Promise((res) =>
+          setTimeout(
+            () =>
+              res({
+                ok: true,
+                status: 200,
+                text: () => Promise.resolve('OK'),
+              }),
+            50,
+          ),
+        ),
+    );
+    deviceUpsertFace.mockImplementation(
+      () =>
+        new Promise((res) =>
+          setTimeout(() => res('added'), 50),
+        ),
     );
     const device = {
       ip: '1.2.3.4',
@@ -48,19 +109,20 @@ describe('syncToDevice', () => {
     const users = Array.from({ length: 4 }, (_, i) => ({
       userId: String(i),
       name: `U${i}`,
-      faceImageBase64: 'eA==',
+      faceImageBase64: jpegBase64,
     }));
     const start = Date.now();
     await syncToDevice(device, users, 2);
     const duration = Date.now() - start;
-    expect(fetch.mock.calls.length).toBe(5);
+    expect(fetch.mock.calls.length).toBe(1);
+    expect(deviceUpsertFace).toHaveBeenCalledTimes(4);
     expect(duration).toBeLessThan(220);
     const insertBody = JSON.parse(fetch.mock.calls[0][1].body);
     expect(insertBody.UserData).toHaveLength(4);
   });
 });
 
-describe('addFace validation', () => {
+describe('upsertFace validation', () => {
   const device = {
     id: 'd1',
     ip: '1.2.3.4',
@@ -72,25 +134,81 @@ describe('addFace validation', () => {
 
   it('warns and skips when userId is empty', async () => {
     const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
-    await addFace(device, '', 'eA==');
+    await upsertFace(device, '', jpegBase64);
     expect(warn).toHaveBeenCalled();
-    expect(fetch).not.toHaveBeenCalled();
+    expect(deviceUpsertFace).not.toHaveBeenCalled();
     warn.mockRestore();
   });
 
   it('warns and skips when photoBase64 is invalid', async () => {
     const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
-    await addFace(device, '1', 'notBase64');
-    expect(warn).toHaveBeenCalled();
-    expect(fetch).not.toHaveBeenCalled();
+    await upsertFace(device, '1', 'notBase64');
+    expect(warn).toHaveBeenCalledWith({ userId: '1', reason: 'no_or_bad_face' }, 'skip push face');
+    expect(deviceUpsertFace).not.toHaveBeenCalled();
     warn.mockRestore();
   });
 
   it('warns and skips when photoBase64 is empty', async () => {
     const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
-    await addFace(device, '1', '');
+    await upsertFace(device, '1', '');
     expect(warn).toHaveBeenCalled();
-    expect(fetch).not.toHaveBeenCalled();
+    expect(deviceUpsertFace).not.toHaveBeenCalled();
     warn.mockRestore();
+  });
+  it('warns and skips when photoBase64 contains newline', async () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    await upsertFace(device, '1', `${jpegBase64}\n`);
+    expect(warn).toHaveBeenCalled();
+    expect(deviceUpsertFace).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+  it('warns and skips when photoBase64 is not JPEG', async () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    await upsertFace(device, '1', Buffer.from('hello').toString('base64'));
+    expect(warn).toHaveBeenCalled();
+    expect(deviceUpsertFace).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('warns and skips when photo dimensions exceed 2000px', async () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    const bigBuffer = await sharp({
+      create: {
+        width: 2001,
+        height: 500,
+        channels: 3,
+        background: { r: 0, g: 0, b: 0 },
+      },
+    })
+      .jpeg()
+      .toBuffer();
+    await upsertFace(device, '1', bigBuffer.toString('base64'));
+    expect(warn).toHaveBeenCalled();
+    expect(deviceUpsertFace).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+  it('warns and skips when photoBase64 exceeds 200k characters', async () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    const longBase64 = 'A'.repeat(200_001);
+    await upsertFace(device, '1', longBase64);
+    expect(warn).toHaveBeenCalled();
+    expect(deviceUpsertFace).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+  it('warns and skips when photoBase64 has invalid characters', async () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    await upsertFace(device, '1', 'abcd!');
+    expect(warn).toHaveBeenCalled();
+    expect(deviceUpsertFace).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('forwards payload to dahua upsert helper', async () => {
+    deviceUpsertFace.mockResolvedValueOnce('added');
+    await upsertFace(device, '1', `${jpegBase64}   `, 'Name');
+    expect(deviceUpsertFace).toHaveBeenCalledTimes(1);
+    const [conn, payload] = deviceUpsertFace.mock.calls[0];
+    expect(conn).toEqual({ host: '1.2.3.4:80', user: 'u', pass: 'p', scheme: 'http' });
+    expect(payload).toEqual({ userId: '1', userName: 'Name', photoBase64: jpegBase64 });
   });
 });

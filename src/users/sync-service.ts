@@ -1,9 +1,14 @@
 import pLimit from "p-limit";
+import sharp from "sharp";
 import { createHash, randomBytes } from "node:crypto";
 import { logger } from "../core/logger.js";
 import { listDevices } from "../devices/index.js";
 import { fetchBufferWithRetry } from "../core/http-fetch.js";
 import { httpLimit } from "../core/http-limit.js";
+import { upsertFace as deviceUpsertFace } from "../devices/dahua-face.js";
+
+const MAX_FACE_DIMENSION = 2000;
+const MAX_FACE_BASE64_LENGTH = 200_000;
 
 export interface DeviceConn {
   id: string | number;
@@ -129,76 +134,133 @@ async function assertOk(res: Response, ctx: Record<string, unknown>) {
   }
 }
 
-export async function addFace(
+export function isLikelyJpegBase64(s?: string): boolean {
+  if (!s) return false;
+  const trimmed = s.trim();
+  return (
+    trimmed.length >= 1000 &&
+    /^[A-Za-z0-9+/=]+$/.test(trimmed) &&
+    trimmed.startsWith("/9j")
+  );
+}
+
+export async function upsertFace(
   device: DeviceConn,
   userId: string,
   photoBase64: string,
   userName?: string,
 ) {
-  const scheme = device.https ? "https" : "http";
-  const url = `${scheme}://${device.ip}:${device.port}/cgi-bin/FaceInfoManager.cgi?action=add&format=json`;
-  const headers = {
-    "Content-Type": "application/json",
-  } as const;
-
   if (typeof userId !== "string" || userId.trim() === "") {
-    logger.warn({ deviceId: device.id, userId }, "addFace skipped: invalid userId");
+    logger.warn({ deviceId: device.id, userId }, "upsertFace skipped: invalid userId");
     return;
   }
 
   if (typeof photoBase64 !== "string" || photoBase64.trim() === "") {
     logger.warn(
       { deviceId: device.id, userId },
-      "addFace skipped: invalid photoBase64",
+      "upsertFace skipped: invalid photoBase64",
     );
     return;
   }
+
+  const hasNewline = /\r|\n/.test(photoBase64);
+  const trimmed = photoBase64.trim();
+  logger.info(
+    {
+      userId,
+      len: trimmed.length,
+      head: trimmed.slice(0, 20),
+      tail: trimmed.slice(-20),
+    },
+    "face payload check",
+  );
+
+  if (!isLikelyJpegBase64(photoBase64)) {
+    logger.warn({ userId, reason: "no_or_bad_face" }, "skip push face");
+    return;
+  }
+
+  if (hasNewline) {
+    logger.warn(
+      { deviceId: device.id, userId },
+      "upsertFace skipped: multiline photoBase64",
+    );
+    return;
+  }
+
+  if (trimmed.length > MAX_FACE_BASE64_LENGTH) {
+    logger.warn(
+      { deviceId: device.id, userId, length: trimmed.length },
+      "upsertFace skipped: photoBase64 too long",
+    );
+    return;
+  }
+
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(trimmed)) {
+    logger.warn(
+      { deviceId: device.id, userId },
+      "upsertFace skipped: invalid photoBase64 characters",
+    );
+    return;
+  }
+
+  let buf: Buffer;
   try {
-    const buf = Buffer.from(photoBase64, "base64");
+    buf = Buffer.from(trimmed, "base64");
     // re-encode to ensure string was valid base64 without extra noise
-    if (buf.length === 0 || buf.toString("base64") !== photoBase64.replace(/\s+/g, "")) {
+    if (buf.length === 0 || buf.toString("base64") !== trimmed) {
       logger.warn(
         { deviceId: device.id, userId },
-        "addFace skipped: invalid photoBase64",
+        "upsertFace skipped: invalid photoBase64",
       );
       return;
     }
   } catch {
-
     logger.warn(
       { deviceId: device.id, userId },
-      "addFace skipped: invalid photoBase64",
+      "upsertFace skipped: invalid photoBase64",
     );
     return;
   }
 
-  const info: Record<string, unknown> = { PhotoData: [photoBase64] };
+  if (!(buf[0] === 0xff && buf[1] === 0xd8)) {
+    logger.warn(
+      { deviceId: device.id, userId },
+      "upsertFace skipped: photo not JPEG",
+    );
+    return;
+  }
+
+  try {
+    const { width, height } = await sharp(buf).metadata();
+    const w = width ?? 0;
+    const h = height ?? 0;
+    if (w > MAX_FACE_DIMENSION || h > MAX_FACE_DIMENSION) {
+      logger.warn(
+        { deviceId: device.id, userId, width: w, height: h },
+        "upsertFace skipped: photo dimensions exceed 2000px",
+      );
+      return;
+    }
+  } catch (err) {
+    logger.warn(
+      { deviceId: device.id, userId, err },
+      "upsertFace skipped: invalid photoBase64",
+    );
+    return;
+  }
+
+  const info: Record<string, unknown> = { PhotoData: [trimmed] };
   if (userName) info.UserName = userName;
 
   const body = { UserID: userId, Info: info };
 
-  let attempt = 0;
-  for (;;) {
-    try {
-      const res = await fetchWithDigest(
-        device,
-        url,
-        { method: "POST", headers, body: JSON.stringify(body) },
-        10_000,
-      );
-      await assertOk(res, {
-        deviceId: device.id,
-        userId,
-        api: "FaceInfoManager.add",
-      });
-      break;
-    } catch (err) {
-      attempt += 1;
-      logger.warn({ err, deviceId: device.id, userId, attempt }, "addFace request failed");
-      if (attempt >= 3) throw err;
-      await new Promise((r) => setTimeout(r, attempt * 200));
-    }
-  }
+  const scheme = device.https ? "https" : "http";
+  const host = device.port ? `${device.ip}:${device.port}` : device.ip;
+  await deviceUpsertFace(
+    { host, user: device.username, pass: device.password, scheme },
+    { userId, userName, photoBase64: trimmed },
+  );
 }
 
 export async function pushFaceFromUrl(
@@ -210,7 +272,7 @@ export async function pushFaceFromUrl(
   try {
     const buf = await fetchBufferWithRetry(faceUrl, 3);
     const photoBase64 = buf.toString("base64");
-    await addFace(device, userId, photoBase64, userName);
+    await upsertFace(device, userId, photoBase64, userName);
   } catch (err) {
     logger.warn(
       { err, deviceId: device.id, userId, faceUrl },
@@ -294,7 +356,7 @@ export async function syncToDevice(
       httpLimit(async () => {
         try {
           if (u.faceImageBase64) {
-            await addFace(device, u.userId, u.faceImageBase64, u.name);
+            await upsertFace(device, u.userId, u.faceImageBase64, u.name);
           } else if (u.faceUrl) {
             await pushFaceFromUrl(device, u.userId, u.name, u.faceUrl);
           }
