@@ -134,6 +134,7 @@ async function assertOk(res: Response, ctx: Record<string, unknown>) {
   }
 }
 
+
 export function isLikelyJpegBase64(s?: string): boolean {
   if (!s) return false;
   const trimmed = s.trim();
@@ -159,6 +160,7 @@ export async function upsertFace(
     logger.warn(
       { deviceId: device.id, userId },
       "upsertFace skipped: invalid photoBase64",
+
     );
     return;
   }
@@ -200,15 +202,18 @@ export async function upsertFace(
     logger.warn(
       { deviceId: device.id, userId },
       "upsertFace skipped: invalid photoBase64 characters",
+
     );
     return;
   }
+
 
   let buf: Buffer;
   try {
     buf = Buffer.from(trimmed, "base64");
     // re-encode to ensure string was valid base64 without extra noise
     if (buf.length === 0 || buf.toString("base64") !== trimmed) {
+
       logger.warn(
         { deviceId: device.id, userId },
         "upsertFace skipped: invalid photoBase64",
@@ -255,11 +260,13 @@ export async function upsertFace(
 
   const body = { UserID: userId, Info: info };
 
+
   const scheme = device.https ? "https" : "http";
   const host = device.port ? `${device.ip}:${device.port}` : device.ip;
   await deviceUpsertFace(
     { host, user: device.username, pass: device.password, scheme },
     { userId, userName, photoBase64: trimmed },
+
   );
 }
 

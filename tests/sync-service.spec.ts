@@ -13,11 +13,13 @@ vi.mock('../src/devices/index.js', () => ({
   ),
 }));
 
+
 const dahuaFaceMock = vi.hoisted(() => ({
   upsertFace: vi.fn(),
 }));
 
 vi.mock('../src/devices/dahua-face.js', () => dahuaFaceMock);
+
 
 import { syncUsersToAsi, syncToDevice, upsertFace } from '../src/users/sync-service.js';
 import { logger } from '../src/core/logger.js';
@@ -61,12 +63,14 @@ describe('syncUsersToAsi', () => {
           ),
         ),
     );
+
     deviceUpsertFace.mockImplementation(
       () =>
         new Promise((res) =>
           setTimeout(() => res('added'), 50),
         ),
     );
+
     const users = [{ userId: '1', name: 'A', faceImageBase64: jpegBase64 }];
     const start = Date.now();
     await syncUsersToAsi(users);
@@ -92,12 +96,14 @@ describe('syncToDevice', () => {
             50,
           ),
         ),
+
     );
     deviceUpsertFace.mockImplementation(
       () =>
         new Promise((res) =>
           setTimeout(() => res('added'), 50),
         ),
+
     );
     const device = {
       ip: '1.2.3.4',
@@ -106,6 +112,7 @@ describe('syncToDevice', () => {
       password: 'p',
       https: false,
     };
+    const jpegBase64 = '/9j/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAj/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFAEBAAAAAAAAAAAAAAAAAAAAAP/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/AKpAB//Z';
     const users = Array.from({ length: 4 }, (_, i) => ({
       userId: String(i),
       name: `U${i}`,
@@ -134,6 +141,8 @@ describe('upsertFace validation', () => {
 
   it('warns and skips when userId is empty', async () => {
     const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+
+
     await upsertFace(device, '', jpegBase64);
     expect(warn).toHaveBeenCalled();
     expect(deviceUpsertFace).not.toHaveBeenCalled();
@@ -143,14 +152,17 @@ describe('upsertFace validation', () => {
   it('warns and skips when photoBase64 is invalid', async () => {
     const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
     await upsertFace(device, '1', 'notBase64');
+
     expect(warn).toHaveBeenCalledWith({ userId: '1', reason: 'no_or_bad_face' }, 'skip push face');
     expect(deviceUpsertFace).not.toHaveBeenCalled();
+
     warn.mockRestore();
   });
 
   it('warns and skips when photoBase64 is empty', async () => {
     const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
     await upsertFace(device, '1', '');
+
     expect(warn).toHaveBeenCalled();
     expect(deviceUpsertFace).not.toHaveBeenCalled();
     warn.mockRestore();
@@ -158,6 +170,7 @@ describe('upsertFace validation', () => {
   it('warns and skips when photoBase64 contains newline', async () => {
     const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
     await upsertFace(device, '1', `${jpegBase64}\n`);
+
     expect(warn).toHaveBeenCalled();
     expect(deviceUpsertFace).not.toHaveBeenCalled();
     warn.mockRestore();
@@ -166,6 +179,7 @@ describe('upsertFace validation', () => {
     const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
     await upsertFace(device, '1', Buffer.from('hello').toString('base64'));
     expect(warn).toHaveBeenCalled();
+
     expect(deviceUpsertFace).not.toHaveBeenCalled();
     warn.mockRestore();
   });
@@ -210,5 +224,6 @@ describe('upsertFace validation', () => {
     const [conn, payload] = deviceUpsertFace.mock.calls[0];
     expect(conn).toEqual({ host: '1.2.3.4:80', user: 'u', pass: 'p', scheme: 'http' });
     expect(payload).toEqual({ userId: '1', userName: 'Name', photoBase64: jpegBase64 });
+
   });
 });

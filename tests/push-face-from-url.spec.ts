@@ -40,9 +40,11 @@ beforeEach(() => {
 
 describe('pushFaceFromUrl', () => {
   it('sends base64 image to device', async () => {
+
     const jpegBuffer = Buffer.from(jpegBase64, 'base64');
     fetchBufferWithRetry.mockResolvedValue(jpegBuffer);
     deviceUpsertFace.mockResolvedValue('added');
+
     const device = {
       ip: '1.2.3.4',
       port: 80,
@@ -51,6 +53,7 @@ describe('pushFaceFromUrl', () => {
       https: false,
     };
     await pushFaceFromUrl(device, '1', 'U1', 'http://img');
+
     expect(deviceUpsertFace).toHaveBeenCalledTimes(1);
     const [conn, payload] = deviceUpsertFace.mock.calls[0];
     expect(conn).toEqual({ host: '1.2.3.4:80', user: 'u', pass: 'p', scheme: 'http' });
@@ -60,6 +63,7 @@ describe('pushFaceFromUrl', () => {
   it('logs warning when upload fails', async () => {
     fetchBufferWithRetry.mockResolvedValue(Buffer.from(jpegBase64, 'base64'));
     deviceUpsertFace.mockRejectedValue(new Error('fail'));
+
     const device = {
       id: 'd1',
       ip: '1.2.3.4',
