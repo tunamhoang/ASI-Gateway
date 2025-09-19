@@ -2,8 +2,6 @@ import crypto from "node:crypto";
 import { request, Agent } from "undici";
 
 const agent = new Agent({
-  keepAliveTimeout: 0,
-  keepAliveMaxTimeout: 0,
   connect: { timeout: 10_000 },
 });
 
