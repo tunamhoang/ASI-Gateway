@@ -66,7 +66,7 @@ describe('devices/dahua-face upsertFace', () => {
       String((addCall[1].body as Buffer).length),
     );
     expect(addCall[1].headers.connection).toBe('close');
-    expect(addCall[1].headers.expect).toBe('');
+    expect(addCall[1].headers.expect).toBeUndefined();
     expect(addCall[1].headers.authorization).toContain(
       'uri="/cgi-bin/FaceInfoManager.cgi?action=add"',
     );

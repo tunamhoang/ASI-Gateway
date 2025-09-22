@@ -80,7 +80,6 @@ export async function digestPostJson(
     headers: {
       "content-length": "0",
       connection: "close",
-      expect: "",
     },
     body: Buffer.alloc(0),
   });
@@ -111,7 +110,6 @@ export async function digestPostJson(
         "content-type": "application/json; charset=UTF-8",
         "content-length": String(buf.length),
         connection: "close",
-        expect: "",
       },
       body: buf,
     });
