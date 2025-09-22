@@ -3,6 +3,8 @@ import { request, Agent } from "undici";
 
 const agent = new Agent({
   connect: { timeout: 10_000 },
+  keepAliveTimeout: 10_000,
+  keepAliveMaxTimeout: 30_000,
 });
 
 function parseWwwAuth(h: string) {
