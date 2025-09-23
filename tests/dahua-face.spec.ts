@@ -54,6 +54,7 @@ describe('devices/dahua-face upsertFace', () => {
     expect(request).toHaveBeenCalledTimes(2);
     const challengeCall = request.mock.calls[0];
     expect(challengeCall[1].headers['content-length']).toBe('0');
+    expect(challengeCall[1].headers.accept).toBe('application/json, text/plain, */*');
     const addCall = request.mock.calls[1];
     expect(addCall[0]).toBe('http://1.2.3.4/cgi-bin/FaceInfoManager.cgi?action=add');
     expect(Buffer.isBuffer(addCall[1].body)).toBe(true);
@@ -66,7 +67,8 @@ describe('devices/dahua-face upsertFace', () => {
       String((addCall[1].body as Buffer).length),
     );
     expect(addCall[1].headers.connection).toBe('close');
-    expect(addCall[1].headers.expect).toBe('');
+    expect(addCall[1].headers.expect).toBeUndefined();
+    expect(addCall[1].headers.accept).toBe('application/json, text/plain, */*');
     expect(addCall[1].headers.authorization).toContain(
       'uri="/cgi-bin/FaceInfoManager.cgi?action=add"',
     );

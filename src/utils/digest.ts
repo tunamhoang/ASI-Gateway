@@ -1,5 +1,7 @@
 import crypto from "node:crypto";
 import { request, Agent } from "undici";
+import type { IncomingHttpHeaders } from "node:http";
+import { ACCEPT_HEADER } from "./http.js";
 
 const agent = new Agent({
   connect: { timeout: 10_000 },
@@ -66,11 +68,22 @@ function buildDigest({
   return `Digest ${kv.join(", ")}`;
 }
 
+function toHeaderRecord(headers: IncomingHttpHeaders): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers)) {
+    if (Array.isArray(value)) out[key] = value.join(", ");
+    else if (typeof value === "number") out[key] = String(value);
+    else if (typeof value === "string") out[key] = value;
+  }
+  return out;
+}
+
 export async function digestPostJson(
   url: string,
   bodyObj: unknown,
   user: string,
   pass: string,
+  extraHeaders: Record<string, string> = {},
 ) {
   const u = new URL(url);
   const uri = u.pathname + (u.search || "");
@@ -80,7 +93,7 @@ export async function digestPostJson(
     headers: {
       "content-length": "0",
       connection: "close",
-      expect: "",
+      accept: ACCEPT_HEADER,
     },
     body: Buffer.alloc(0),
   });
@@ -111,12 +124,17 @@ export async function digestPostJson(
         "content-type": "application/json; charset=UTF-8",
         "content-length": String(buf.length),
         connection: "close",
-        expect: "",
+        accept: ACCEPT_HEADER,
+        ...extraHeaders,
       },
       body: buf,
     });
     const text = await response.body.text();
-    return { status: response.statusCode, text };
+    return {
+      status: response.statusCode,
+      text,
+      headers: toHeaderRecord(response.headers as IncomingHttpHeaders),
+    };
   } finally {
     await challenge.body.text().catch(() => {});
   }
