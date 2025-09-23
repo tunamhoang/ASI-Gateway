@@ -143,7 +143,7 @@ describe('upsertFace validation', () => {
     const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
 
 
-    await upsertFace(device, '', jpegBase64);
+    await upsertFace(device, '', jpegBase64, 'Name');
     expect(warn).toHaveBeenCalled();
     expect(deviceUpsertFace).not.toHaveBeenCalled();
     warn.mockRestore();
@@ -151,9 +151,12 @@ describe('upsertFace validation', () => {
 
   it('warns and skips when photoBase64 is invalid', async () => {
     const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
-    await upsertFace(device, '1', 'notBase64');
+    await upsertFace(device, '1', 'notBase64', 'Name');
 
-    expect(warn).toHaveBeenCalledWith({ userId: '1', reason: 'no_or_bad_face' }, 'skip push face');
+    expect(warn).toHaveBeenCalledWith(
+      { deviceId: device.id, userId: '1' },
+      'upsertFace skipped: photo not JPEG',
+    );
     expect(deviceUpsertFace).not.toHaveBeenCalled();
 
     warn.mockRestore();
@@ -161,23 +164,34 @@ describe('upsertFace validation', () => {
 
   it('warns and skips when photoBase64 is empty', async () => {
     const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
-    await upsertFace(device, '1', '');
+    await upsertFace(device, '1', '', 'Name');
 
     expect(warn).toHaveBeenCalled();
     expect(deviceUpsertFace).not.toHaveBeenCalled();
     warn.mockRestore();
   });
-  it('warns and skips when photoBase64 contains newline', async () => {
+  it('warns and skips when name is missing', async () => {
     const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
-    await upsertFace(device, '1', `${jpegBase64}\n`);
+    await upsertFace(device, '1', jpegBase64);
 
-    expect(warn).toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(
+      { deviceId: device.id, userId: '1', issues: ['name required'] },
+      'upsertFace skipped: invalid face payload',
+    );
     expect(deviceUpsertFace).not.toHaveBeenCalled();
     warn.mockRestore();
+  });
+  it('normalizes and forwards base64 with whitespace', async () => {
+    deviceUpsertFace.mockResolvedValueOnce('added');
+    await upsertFace(device, '1', `${jpegBase64}\n  `, 'Name');
+
+    expect(deviceUpsertFace).toHaveBeenCalledTimes(1);
+    const [, payload] = deviceUpsertFace.mock.calls[0];
+    expect(payload).toEqual({ userId: '1', userName: 'Name', photoBase64: jpegBase64 });
   });
   it('warns and skips when photoBase64 is not JPEG', async () => {
     const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
-    await upsertFace(device, '1', Buffer.from('hello').toString('base64'));
+    await upsertFace(device, '1', Buffer.from('hello').toString('base64'), 'Name');
     expect(warn).toHaveBeenCalled();
 
     expect(deviceUpsertFace).not.toHaveBeenCalled();
@@ -196,7 +210,7 @@ describe('upsertFace validation', () => {
     })
       .jpeg()
       .toBuffer();
-    await upsertFace(device, '1', bigBuffer.toString('base64'));
+    await upsertFace(device, '1', bigBuffer.toString('base64'), 'Name');
     expect(warn).toHaveBeenCalled();
     expect(deviceUpsertFace).not.toHaveBeenCalled();
     warn.mockRestore();
@@ -204,15 +218,21 @@ describe('upsertFace validation', () => {
   it('warns and skips when photoBase64 exceeds 200k characters', async () => {
     const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
     const longBase64 = 'A'.repeat(200_001);
-    await upsertFace(device, '1', longBase64);
-    expect(warn).toHaveBeenCalled();
+    await upsertFace(device, '1', longBase64, 'Name');
+    expect(warn).toHaveBeenCalledWith(
+      { deviceId: device.id, userId: '1' },
+      'upsertFace skipped: photo not JPEG',
+    );
     expect(deviceUpsertFace).not.toHaveBeenCalled();
     warn.mockRestore();
   });
   it('warns and skips when photoBase64 has invalid characters', async () => {
     const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
-    await upsertFace(device, '1', 'abcd!');
-    expect(warn).toHaveBeenCalled();
+    await upsertFace(device, '1', 'abcd!', 'Name');
+    expect(warn).toHaveBeenCalledWith(
+      { deviceId: device.id, userId: '1', issues: ['face_image_b64 contains invalid base64 characters'] },
+      'upsertFace skipped: invalid face payload',
+    );
     expect(deviceUpsertFace).not.toHaveBeenCalled();
     warn.mockRestore();
   });

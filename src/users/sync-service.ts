@@ -6,9 +6,9 @@ import { listDevices } from "../devices/index.js";
 import { fetchBufferWithRetry } from "../core/http-fetch.js";
 import { httpLimit } from "../core/http-limit.js";
 import { upsertFace as deviceUpsertFace } from "../devices/dahua-face.js";
+import { validateFaceRequest } from "../utils/image.js";
 
 const MAX_FACE_DIMENSION = 2000;
-const MAX_FACE_BASE64_LENGTH = 200_000;
 
 export interface DeviceConn {
   id: string | number;
@@ -135,16 +135,6 @@ async function assertOk(res: Response, ctx: Record<string, unknown>) {
 }
 
 
-export function isLikelyJpegBase64(s?: string): boolean {
-  if (!s) return false;
-  const trimmed = s.trim();
-  return (
-    trimmed.length >= 1000 &&
-    /^[A-Za-z0-9+/=]+$/.test(trimmed) &&
-    trimmed.startsWith("/9j")
-  );
-}
-
 export async function upsertFace(
   device: DeviceConn,
   userId: string,
@@ -165,61 +155,36 @@ export async function upsertFace(
     return;
   }
 
-  const hasNewline = /\r|\n/.test(photoBase64);
-  const trimmed = photoBase64.trim();
+  const validation = validateFaceRequest({
+    personId: userId,
+    name: userName,
+    imageB64: photoBase64,
+  });
+  if (validation.issues.length || !validation.normalized) {
+    logger.warn(
+      { deviceId: device.id, userId, issues: validation.issues },
+      "upsertFace skipped: invalid face payload",
+    );
+    return;
+  }
+
+  const { b64 } = validation.normalized;
+  const safeName = validation.name;
+
   logger.info(
     {
       userId,
-      len: trimmed.length,
-      head: trimmed.slice(0, 20),
-      tail: trimmed.slice(-20),
+      len: b64.length,
+      bytes: validation.normalized.bytes,
+      head: b64.slice(0, 20),
+      tail: b64.slice(-20),
     },
-    "face payload check",
+    "face payload normalized",
   );
-
-  if (!isLikelyJpegBase64(photoBase64)) {
-    logger.warn({ userId, reason: "no_or_bad_face" }, "skip push face");
-    return;
-  }
-
-  if (hasNewline) {
-    logger.warn(
-      { deviceId: device.id, userId },
-      "upsertFace skipped: multiline photoBase64",
-    );
-    return;
-  }
-
-  if (trimmed.length > MAX_FACE_BASE64_LENGTH) {
-    logger.warn(
-      { deviceId: device.id, userId, length: trimmed.length },
-      "upsertFace skipped: photoBase64 too long",
-    );
-    return;
-  }
-
-  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(trimmed)) {
-    logger.warn(
-      { deviceId: device.id, userId },
-      "upsertFace skipped: invalid photoBase64 characters",
-
-    );
-    return;
-  }
-
 
   let buf: Buffer;
   try {
-    buf = Buffer.from(trimmed, "base64");
-    // re-encode to ensure string was valid base64 without extra noise
-    if (buf.length === 0 || buf.toString("base64") !== trimmed) {
-
-      logger.warn(
-        { deviceId: device.id, userId },
-        "upsertFace skipped: invalid photoBase64",
-      );
-      return;
-    }
+    buf = Buffer.from(b64, "base64");
   } catch {
     logger.warn(
       { deviceId: device.id, userId },
@@ -255,18 +220,11 @@ export async function upsertFace(
     return;
   }
 
-  const info: Record<string, unknown> = { PhotoData: [trimmed] };
-  if (userName) info.UserName = userName;
-
-  const body = { UserID: userId, Info: info };
-
-
   const scheme = device.https ? "https" : "http";
   const host = device.port ? `${device.ip}:${device.port}` : device.ip;
   await deviceUpsertFace(
     { host, user: device.username, pass: device.password, scheme },
-    { userId, userName, photoBase64: trimmed },
-
+    { userId, userName: safeName ?? userName, photoBase64: b64 },
   );
 }
 
