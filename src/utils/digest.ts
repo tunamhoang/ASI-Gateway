@@ -124,7 +124,6 @@ export async function digestPostJson(
         "content-type": "application/json; charset=UTF-8",
         "content-length": String(buf.length),
         connection: "close",
-        accept: ACCEPT_HEADER,
         ...extraHeaders,
       },
       body: buf,
