@@ -1,22 +1,29 @@
-import pLimit from "p-limit";
-import sharp from "sharp";
-import { createHash, randomBytes } from "node:crypto";
-import { logger } from "../core/logger.js";
-import { listDevices } from "../devices/index.js";
-import { fetchBufferWithRetry } from "../core/http-fetch.js";
-import { httpLimit } from "../core/http-limit.js";
-import { upsertFace as deviceUpsertFace } from "../devices/dahua-face.js";
-import { validateFaceRequest } from "../utils/image.js";
+import pLimit from 'p-limit';
+import sharp from 'sharp';
+import { logger } from '../core/logger.js';
+import { listDevices } from '../devices/index.js';
+import { fetchBufferWithRetry } from '../core/http-fetch.js';
+import { httpLimit } from '../core/http-limit.js';
+import { buildAsiConfig } from '../devices/dahua-face.js';
+import {
+  AsiConfig,
+  AsiUser,
+  createUser,
+  getUserById,
+  insertUserFace,
+} from '../asi/client.js';
+import { validateFaceRequest } from '../utils/image.js';
 
 const MAX_FACE_DIMENSION = 2000;
 
 export interface DeviceConn {
-  id: string | number;
+  id?: string | number;
   ip: string;
-  port: number;
+  port?: number;
   https?: boolean;
-  username: string;
-  password: string;
+  username?: string;
+  password?: string;
+  apiToken?: string;
 }
 
 export interface UserSyncItem {
@@ -24,312 +31,176 @@ export interface UserSyncItem {
   name: string;
   citizenIdNo?: string;
   faceImageBase64?: string;
-  faceUrl?: string; // ✅ thêm để đồng bộ với đoạn push từ URL
+  faceUrl?: string;
 }
 
-function chunk<T>(arr: T[], size: number): T[][] {
-  const out: T[][] = [];
-  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
-  return out;
+interface UpsertContext {
+  deviceId?: string | number;
 }
 
-async function fetchWithTimeout(
-  input: RequestInfo | URL,
-  init: RequestInit = {},
-  timeoutMs = 10_000,
-) {
-  const controller = new AbortController();
-  const t = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const res = await fetch(input, { ...init, signal: controller.signal });
-    return res;
-  } finally {
-    clearTimeout(t);
+async function ensureFaceImage(
+  item: UserSyncItem,
+  ctx: UpsertContext,
+): Promise<string> {
+  if (item.faceImageBase64) return item.faceImageBase64;
+  if (!item.faceUrl) {
+    throw new Error('faceImageBase64 is required');
   }
-}
 
-function md5(str: string) {
-  return createHash("md5").update(str).digest("hex");
-}
-
-function parseDigest(header: string) {
-  return header
-    .replace(/^Digest\s+/i, "")
-    .split(/,\s*/)
-    .reduce(
-      (acc: Record<string, string>, cur) => {
-        const eq = cur.indexOf("=");
-        if (eq > 0) {
-          const key = cur.slice(0, eq).trim();
-          const val = cur
-            .slice(eq + 1)
-            .trim()
-            .replace(/^"|"$/g, "");
-          acc[key] = val;
-        }
-        return acc;
-      },
-      {} as Record<string, string>,
-    );
-}
-
-async function fetchWithDigest(
-  device: DeviceConn,
-  url: string,
-  init: RequestInit = {},
-  timeoutMs = 10_000,
-) {
-  // First request to obtain nonce
-  const res1 = await fetchWithTimeout(
-    url,
-    { ...init, headers: { ...(init.headers || {}) } },
-    timeoutMs,
+  const buf = await httpLimit(() => fetchBufferWithRetry(item.faceUrl!, 3));
+  const base64 = buf.toString('base64');
+  logger.info(
+    { userId: item.userId, deviceId: ctx.deviceId, bytes: buf.length },
+    'downloaded face from url',
   );
-  if (res1.status !== 401) return res1;
-
-  const authHeader = res1.headers.get("www-authenticate");
-  if (!authHeader) return res1;
-  res1.body?.cancel();
-
-  const params = parseDigest(authHeader);
-  const method = (init.method || "GET").toUpperCase();
-  const uri = new URL(url).pathname + new URL(url).search;
-  const nc = "00000001";
-  const cnonce = randomBytes(8).toString("hex");
-  const ha1 = md5(`${device.username}:${params.realm}:${device.password}`);
-  const ha2 = md5(`${method}:${uri}`);
-  const response = md5(
-    `${ha1}:${params.nonce}:${nc}:${cnonce}:${params.qop}:${ha2}`,
-  );
-
-  let header =
-    `Digest username="${device.username}", realm="${params.realm}", nonce="${params.nonce}", uri="${uri}", ` +
-    `qop=${params.qop}, nc=${nc}, cnonce="${cnonce}", response="${response}"`;
-  if (params.opaque) header += `, opaque="${params.opaque}"`;
-
-  const headers = { ...(init.headers || {}), Authorization: header } as Record<
-    string,
-    string
-  >;
-  return fetchWithTimeout(url, { ...init, headers }, timeoutMs);
+  return base64;
 }
 
-async function assertOk(res: Response, ctx: Record<string, unknown>) {
-  if (!res.ok) {
-    let bodyText = "";
-    try {
-      bodyText = await res.text();
-    } catch {}
-    const err = new Error(`HTTP ${res.status} ${res.statusText}`);
-    logger.warn(
-      {
-        ...ctx,
-        status: res.status,
-        statusText: res.statusText,
-        body: bodyText.slice(0, 500),
-      },
-      "request failed",
-    );
+async function normalizeFace(
+  user: UserSyncItem,
+  base64: string,
+  ctx: UpsertContext,
+): Promise<string> {
+  const validation = validateFaceRequest({
+    personId: user.userId,
+    name: user.name,
+    imageB64: base64,
+  });
+
+  if (validation.issues.length || !validation.normalized) {
+    const err = new Error(validation.issues.join('; ') || 'invalid face payload');
+    (err as any).issues = validation.issues;
     throw err;
   }
-}
 
-
-export async function upsertFace(
-  device: DeviceConn,
-  userId: string,
-  photoBase64: string,
-  userName?: string,
-) {
-  if (typeof userId !== "string" || userId.trim() === "") {
-    logger.warn({ deviceId: device.id, userId }, "upsertFace skipped: invalid userId");
-    return;
+  const buf = Buffer.from(validation.normalized.b64, 'base64');
+  if (!(buf[0] === 0xff && buf[1] === 0xd8)) {
+    throw new Error('photo not JPEG');
   }
 
-  if (typeof photoBase64 !== "string" || photoBase64.trim() === "") {
-    logger.warn(
-      { deviceId: device.id, userId },
-      "upsertFace skipped: invalid photoBase64",
-
-    );
-    return;
+  const meta = await sharp(buf).metadata();
+  const w = meta.width ?? 0;
+  const h = meta.height ?? 0;
+  if (w > MAX_FACE_DIMENSION || h > MAX_FACE_DIMENSION) {
+    throw new Error('photo dimensions exceed 2000px');
   }
-
-  const validation = validateFaceRequest({
-    personId: userId,
-    name: userName,
-    imageB64: photoBase64,
-  });
-  if (validation.issues.length || !validation.normalized) {
-    logger.warn(
-      { deviceId: device.id, userId, issues: validation.issues },
-      "upsertFace skipped: invalid face payload",
-    );
-    return;
-  }
-
-  const { b64 } = validation.normalized;
-  const safeName = validation.name;
 
   logger.info(
     {
-      userId,
-      len: b64.length,
+      userId: user.userId,
+      deviceId: ctx.deviceId,
+      width: w,
+      height: h,
       bytes: validation.normalized.bytes,
-      head: b64.slice(0, 20),
-      tail: b64.slice(-20),
     },
-    "face payload normalized",
+    'face normalized',
   );
+  return validation.normalized.b64;
+}
 
-  let buf: Buffer;
-  try {
-    buf = Buffer.from(b64, "base64");
-  } catch {
-    logger.warn(
-      { deviceId: device.id, userId },
-      "upsertFace skipped: invalid photoBase64",
-    );
-    return;
+function mapUserPayload(item: UserSyncItem): AsiUser {
+  return {
+    userId: item.userId,
+    name: item.name,
+    citizenIdNo: item.citizenIdNo,
+  };
+}
+
+export async function upsertUserAndFace(
+  cfg: AsiConfig,
+  item: UserSyncItem & { faceImageBase64: string },
+  ctx: UpsertContext = {},
+) {
+  if (!item.userId) throw new Error('userId is required');
+  if (!item.faceImageBase64) throw new Error('faceImageBase64 is required');
+
+  const logCtx = { userId: item.userId, deviceId: ctx.deviceId, baseUrl: cfg.baseUrl };
+  logger.info(logCtx, 'upsertUserAndFace start');
+
+  const lookup = await getUserById(cfg, item.userId);
+  if (!lookup.exists) {
+    logger.info(logCtx, 'user missing on asi, creating');
+    await createUser(cfg, mapUserPayload(item));
   }
 
-  if (!(buf[0] === 0xff && buf[1] === 0xd8)) {
-    logger.warn(
-      { deviceId: device.id, userId },
-      "upsertFace skipped: photo not JPEG",
-    );
-    return;
-  }
+  await insertUserFace(cfg, item.userId, item.faceImageBase64);
+  logger.info(logCtx, 'upsertUserAndFace done');
+  return { ok: true, userId: item.userId };
+}
 
+async function processUser(
+  cfg: AsiConfig,
+  device: DeviceConn,
+  item: UserSyncItem,
+) {
+  const ctx: UpsertContext = { deviceId: device.id ?? device.ip };
   try {
-    const { width, height } = await sharp(buf).metadata();
-    const w = width ?? 0;
-    const h = height ?? 0;
-    if (w > MAX_FACE_DIMENSION || h > MAX_FACE_DIMENSION) {
-      logger.warn(
-        { deviceId: device.id, userId, width: w, height: h },
-        "upsertFace skipped: photo dimensions exceed 2000px",
-      );
-      return;
-    }
+    const raw = await ensureFaceImage(item, ctx);
+    const normalized = await normalizeFace(item, raw, ctx);
+    await upsertUserAndFace(cfg, { ...item, faceImageBase64: normalized }, ctx);
   } catch (err) {
-    logger.warn(
-      { deviceId: device.id, userId, err },
-      "upsertFace skipped: invalid photoBase64",
+    logger.error(
+      { err, deviceId: ctx.deviceId, userId: item.userId },
+      'processUser failed',
     );
-    return;
+    throw err;
   }
-
-  const scheme = device.https ? "https" : "http";
-  const host = device.port ? `${device.ip}:${device.port}` : device.ip;
-  await deviceUpsertFace(
-    { host, user: device.username, pass: device.password, scheme },
-    { userId, userName: safeName ?? userName, photoBase64: b64 },
-  );
 }
 
 export async function pushFaceFromUrl(
   device: DeviceConn,
   userId: string,
-  userName: string,
+  name: string,
   faceUrl: string,
 ) {
-  try {
-    const buf = await fetchBufferWithRetry(faceUrl, 3);
-    const photoBase64 = buf.toString("base64");
-    await upsertFace(device, userId, photoBase64, userName);
-  } catch (err) {
-    logger.warn(
-      { err, deviceId: device.id, userId, faceUrl },
-      "push face failed",
-    );
-  }
-}
-
-export async function syncUsersToAsi(
-  users: UserSyncItem[],
-  deviceConcurrency = 5,
-): Promise<void> {
-  logger.info({ count: users.length }, "syncUsersToAsi triggered");
-
-  let devices: DeviceConn[];
-  try {
-    devices = (await listDevices()) as DeviceConn[];
-  } catch (err) {
-    logger.error({ err }, "listDevices failed");
-    throw err;
-  }
-
-  const limit = pLimit(deviceConcurrency);
-  await Promise.all(
-    devices.map((device) => limit(() => syncToDevice(device, users))),
-  );
+  const cfg = buildAsiConfig(device);
+  const item: UserSyncItem = { userId, name, faceUrl };
+  await processUser(cfg, device, item);
 }
 
 export async function syncToDevice(
   device: DeviceConn,
   users: UserSyncItem[],
-  requestConcurrency = 5,
+  requestConcurrency = 4,
 ) {
-  const scheme = device.https ? "https" : "http";
-  const headers = {
-    "Content-Type": "application/json",
-  } as const;
-
+  const cfg = buildAsiConfig(device);
   const limit = pLimit(requestConcurrency);
 
-  // 1) Push user metadata theo batch 10
-  const batches = chunk(users, 10);
   await Promise.all(
-    batches.map((batch) =>
+    users.map((user) =>
       limit(async () => {
-        const url = `${scheme}://${device.ip}:${device.port}/cgi-bin/AccessUser.cgi?action=insertMulti&format=json`;
-        const body = {
-          UserData: batch.map((u) => {
-            const x: Record<string, unknown> = {
-              UserID: u.userId,
-              UserName: u.name,
-            };
-            if (u.citizenIdNo) x.CitizenIDNo = u.citizenIdNo; // ✅ loại undefined
-            return x;
-          }),
-        };
-
         try {
-          const res = await fetchWithDigest(
-            device,
-            url,
-            { method: "POST", headers, body: JSON.stringify(body) },
-            10_000,
-          );
-          await assertOk(res, {
-            deviceId: device.id,
-            api: "AccessUser.insertMulti",
-            users: body.UserData.length,
-          });
+          await processUser(cfg, device, user);
         } catch (err) {
-          logger.warn({ err, deviceId: device.id }, "insertMulti failed");
+          logger.error(
+            { err, deviceId: device.id ?? device.ip, userId: user.userId },
+            'syncToDevice user failed',
+          );
         }
       }),
     ),
   );
+}
 
-  // 2) Push khuôn mặt (nếu có)
-  const faceUsers = users.filter((u) => u.faceImageBase64 || u.faceUrl);
+export async function syncUsersToAsi(
+  users: UserSyncItem[],
+  deviceConcurrency = 3,
+) {
+  logger.info({ count: users.length }, 'syncUsersToAsi triggered');
+  const devices = (await listDevices()) as DeviceConn[];
+  if (!devices.length) {
+    logger.warn('syncUsersToAsi skipped: no devices registered');
+    return;
+  }
+
+  const limit = pLimit(deviceConcurrency);
   await Promise.all(
-    faceUsers.map((u) =>
-      httpLimit(async () => {
+    devices.map((device) =>
+      limit(async () => {
         try {
-          if (u.faceImageBase64) {
-            await upsertFace(device, u.userId, u.faceImageBase64, u.name);
-          } else if (u.faceUrl) {
-            await pushFaceFromUrl(device, u.userId, u.name, u.faceUrl);
-          }
+          await syncToDevice(device, users);
         } catch (err) {
-          logger.warn(
-            { err, deviceId: device.id, userId: u.userId },
-            "push face (direct) failed",
-          );
+          logger.error({ err, deviceId: device.id }, 'syncToDevice failed');
         }
       }),
     ),

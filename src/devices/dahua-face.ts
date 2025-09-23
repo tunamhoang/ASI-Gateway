@@ -1,78 +1,41 @@
-import { logger } from "../core/logger.js";
-import { digestPostJson } from "../utils/digest.js";
-import { normalizeBase64Jpeg } from "../utils/image.js";
-
-function previewBody(body: string) {
-  return body.length > 2000 ? `${body.slice(0, 2000)}…[truncated]` : body;
-}
-
-function logFailure(
-  action: string,
-  res: { status: number; text: string; headers: Record<string, string> },
-) {
-  let parsed: unknown = res.text;
-  try {
-    parsed = JSON.parse(res.text);
-  } catch {}
-
-  logger.warn(
-    {
-      action,
-      status: res.status,
-      headers: res.headers,
-      body: previewBody(res.text),
-      parsed,
-    },
-    "dahua-face request failed",
-  );
-}
+import { AsiConfig } from '../asi/client.js';
 
 export interface DahuaFaceDevice {
-  host: string;
-  user: string;
-  pass: string;
-  scheme?: "http" | "https";
+  id?: string | number;
+  ip: string;
+  port?: number;
+  https?: boolean;
+  username?: string;
+  password?: string;
+  apiToken?: string;
 }
 
-interface UpsertFacePayload {
-  userId: string;
-  userName?: string;
-  photoBase64: string;
+function normalizePort(device: DahuaFaceDevice): number | undefined {
+  if (typeof device.port === 'number' && !Number.isNaN(device.port)) {
+    return device.port;
+  }
+  if (device.https) return 443;
+  return 80;
 }
 
-export async function upsertFace(
-  device: DahuaFaceDevice,
-  { userId, userName, photoBase64 }: UpsertFacePayload,
-): Promise<"added" | "updated"> {
-  const scheme = device.scheme ?? "http";
-  const baseUrl = `${scheme}://${device.host}/cgi-bin/FaceInfoManager.cgi`;
-  const { b64 } = normalizeBase64Jpeg(photoBase64);
-  const safeName = userName?.trim();
-  const info: Record<string, unknown> = { PhotoData: [b64] };
-  if (safeName) info.UserName = safeName.slice(0, 32);
-  const body = { UserID: userId, Info: info };
+export function maskToken(token: string | undefined): string | undefined {
+  if (!token) return token;
+  if (token.length <= 4) return '***';
+  return `${token.slice(0, 2)}***${token.slice(-2)}`;
+}
 
-  const add = await digestPostJson(
-    `${baseUrl}?action=add`,
-    body,
-    device.user,
-    device.pass,
-  );
-  if (add.status === 200 && /OK/i.test(add.text)) return "added";
-  logFailure("add", add);
+export function buildAsiConfig(device: DahuaFaceDevice): AsiConfig {
+  const port = normalizePort(device);
+  const scheme = device.https ? 'https' : 'http';
+  const host = port ? `${device.ip}:${port}` : device.ip;
+  const baseUrl = `${scheme}://${host}`;
 
-  const upd = await digestPostJson(
-    `${baseUrl}?action=update`,
-    body,
-    device.user,
-    device.pass,
-  );
-  if (upd.status === 200 && /OK/i.test(upd.text)) return "updated";
-  logFailure("update", upd);
+  if (device.apiToken) {
+    return { baseUrl, token: device.apiToken };
+  }
 
-  throw new Error(
-    `face upsert failed: add=${add.status} ${previewBody(add.text)} | update=${upd.status} ${previewBody(
-      upd.text,
-    )}`,
-  );
+  const user = device.username ?? '';
+  const pass = device.password ?? '';
+  const credential = `${user}:${pass}`;
+  return { baseUrl, token: credential };
 }
